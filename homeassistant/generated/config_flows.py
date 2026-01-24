@@ -14,6 +14,7 @@ FLOWS = {
         "integration",
         "min_max",
         "mold_indicator",
+        "radar_fusion",
         "random",
         "statistics",
         "switch_as_x",

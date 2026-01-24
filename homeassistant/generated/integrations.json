@@ -8008,6 +8008,12 @@
       "config_flow": true,
       "iot_class": "calculated"
     },
+    "radar_fusion": {
+      "name": "Radar Fusion",
+      "integration_type": "helper",
+      "config_flow": true,
+      "iot_class": "calculated"
+    },
     "random": {
       "integration_type": "helper",
       "config_flow": true,
