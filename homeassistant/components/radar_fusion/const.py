@@ -27,6 +27,15 @@ DEFAULT_NAME = "Radar Fusion"
 
 # Service names
 SERVICE_GET_FLOOR_DATA = "get_floor_data"
+SERVICE_RESET_HEATMAP = "reset_heatmap"
+
+# Heatmap settings
+HEATMAP_RES_MM = 500  # 0.5 meter bins
+HEATMAP_HOURLY_SECONDS = 3600
+HEATMAP_24H_SECONDS = 24 * 3600
+
+# Persistence keys
+CONF_HEATMAPS_ALLTIME = "heatmaps_alltime"
 
 
 def parse_vertices(text: str) -> list[list[float]]:

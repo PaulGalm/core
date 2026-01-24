@@ -93,7 +93,7 @@ class RadarFusionOptionsFlow(OptionsFlow):
         self._sensors: list[dict[str, Any]] = []
         self._zones: list[dict[str, Any]] = []
         self._block_zones: list[dict[str, Any]] = []
-            self._edit_index: int = -1  # -1 means unset
+        self._edit_index: int | None = None
 
     def _get_target_entities_from_device(self, device_id: str) -> list[str]:
         """Get target entities from a device."""
@@ -213,7 +213,7 @@ class RadarFusionOptionsFlow(OptionsFlow):
             return await self.async_step_sensors()
 
         # First step: select which sensor to edit
-            if self._edit_index == -1:
+        if self._edit_index == -1:
             if user_input is not None:
                 # Extract index from selection like "0: Floor None - Position..."
                 selected = user_input["sensor_index"]
@@ -251,9 +251,13 @@ class RadarFusionOptionsFlow(OptionsFlow):
                 target_entities = user_input[CONF_TARGET_ENTITIES]
                 if len(target_entities) != 6:
                     errors["base"] = "invalid_target_count"
+                elif self._edit_index is None:
+                    # Update the sensor at the edit index - internal error
+                    errors["base"] = "internal_error"
                 else:
-                    # Update the sensor at the edit index
-                    self._sensors[self._edit_index] = {
+                    idx = self._edit_index
+                    assert isinstance(idx, int)
+                    self._sensors[idx] = {
                         CONF_FLOOR_ID: user_input.get(CONF_FLOOR_ID),
                         CONF_POSITION_X: user_input[CONF_POSITION_X],
                         CONF_POSITION_Y: user_input[CONF_POSITION_Y],
@@ -261,7 +265,10 @@ class RadarFusionOptionsFlow(OptionsFlow):
                         CONF_TARGET_ENTITIES: target_entities,
                     }
 
-                    new_data = {**self.config_entry.data, CONF_SENSORS: self._sensors}
+                    new_data = {
+                        **self.config_entry.data,
+                        CONF_SENSORS: self._sensors,
+                    }
                     self.hass.config_entries.async_update_entry(
                         self.config_entry, data=new_data
                     )
@@ -274,7 +281,11 @@ class RadarFusionOptionsFlow(OptionsFlow):
         # Get current sensor values for defaults
         if self._edit_index is None:
             return await self.async_step_sensors()
-        current_sensor = self._sensors[self._edit_index]
+
+        # Narrow the type for mypy: assert _edit_index is int and use local var
+        idx = self._edit_index
+        assert isinstance(idx, int)
+        current_sensor = self._sensors[idx]
 
         return self.async_show_form(
             step_id="edit_sensor_form",

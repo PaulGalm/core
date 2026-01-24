@@ -9,12 +9,19 @@ from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
 from homeassistant.helpers import config_validation as cv
 
-from .const import CONF_FLOOR_ID, DOMAIN, SERVICE_GET_FLOOR_DATA
+from .const import CONF_FLOOR_ID, DOMAIN, SERVICE_GET_FLOOR_DATA, SERVICE_RESET_HEATMAP
 from .coordinator import RadarFusionCoordinator
 
 PLATFORMS = [Platform.BINARY_SENSOR, Platform.SWITCH]
 
 SERVICE_GET_FLOOR_DATA_SCHEMA = vol.Schema(
+    {
+        vol.Required("config_entry_id"): cv.string,
+        vol.Optional(CONF_FLOOR_ID): vol.Any(cv.string, None),
+    }
+)
+
+SERVICE_RESET_HEATMAP_SCHEMA = vol.Schema(
     {
         vol.Required("config_entry_id"): cv.string,
         vol.Optional(CONF_FLOOR_ID): vol.Any(cv.string, None),
@@ -78,6 +85,17 @@ async def async_register_services(hass: HomeAssistant) -> None:
         coordinator: RadarFusionCoordinator = hass.data[DOMAIN][config_entry_id]
         return coordinator.get_floor_data(floor_id)
 
+    async def handle_reset_heatmap(call: ServiceCall) -> None:
+        """Handle reset_heatmap service call."""
+        config_entry_id = call.data["config_entry_id"]
+        floor_id = call.data.get(CONF_FLOOR_ID)
+
+        if config_entry_id not in hass.data[DOMAIN]:
+            return
+
+        coordinator: RadarFusionCoordinator = hass.data[DOMAIN][config_entry_id]
+        coordinator.reset_heatmap(floor_id)
+
     # Only register once
     if not hass.services.has_service(DOMAIN, SERVICE_GET_FLOOR_DATA):
         hass.services.async_register(
@@ -86,4 +104,12 @@ async def async_register_services(hass: HomeAssistant) -> None:
             handle_get_floor_data,
             schema=SERVICE_GET_FLOOR_DATA_SCHEMA,
             supports_response=SupportsResponse.OPTIONAL,
+        )
+
+    if not hass.services.has_service(DOMAIN, SERVICE_RESET_HEATMAP):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_RESET_HEATMAP,
+            handle_reset_heatmap,
+            schema=SERVICE_RESET_HEATMAP_SCHEMA,
         )

@@ -17,6 +17,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from .const import (
     CONF_BLOCK_ZONES,
     CONF_FLOOR_ID,
+    CONF_HEATMAPS_ALLTIME,
     CONF_POSITION_X,
     CONF_POSITION_Y,
     CONF_ROTATION,
@@ -27,6 +28,9 @@ from .const import (
     CONF_ZONES,
     DEFAULT_STALENESS_TIMEOUT,
     DOMAIN,
+    HEATMAP_24H_SECONDS,
+    HEATMAP_HOURLY_SECONDS,
+    HEATMAP_RES_MM,
     point_in_polygon,
     transform_coordinates,
 )
@@ -64,6 +68,29 @@ class RadarFusionCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._sensor_states: dict[str, Any] = {}
         self._last_updates: dict[str, datetime] = {}
 
+        # Heatmap event lists and counts per floor
+        # Events stored as list of (timestamp, x_idx, y_idx)
+        self._events_hourly: dict[str | None, list[tuple[datetime, int, int]]] = {}
+        self._events_24h: dict[str | None, list[tuple[datetime, int, int]]] = {}
+
+        # Counts per bin: mapping floor_id -> {(x_idx,y_idx): count}
+        self._counts_hourly: dict[str | None, dict[tuple[int, int], int]] = {}
+        self._counts_24h: dict[str | None, dict[tuple[int, int], int]] = {}
+        self._counts_alltime: dict[str | None, dict[tuple[int, int], int]] = {}
+
+        # Load persisted all-time heatmaps from options
+        persisted = config_entry.options.get(CONF_HEATMAPS_ALLTIME, {})
+        for floor_id, mapping in persisted.items():
+            # mapping is dict of "x_y" -> count
+            d: dict[tuple[int, int], int] = {}
+            for k, v in mapping.items():
+                try:
+                    x_str, y_str = k.split("_")
+                    d[(int(x_str), int(y_str))] = int(v)
+                except (ValueError, TypeError):
+                    continue
+            self._counts_alltime[floor_id] = d
+
         # Track block zone states (entity_id -> is_on)
         self._block_zone_states: dict[str, bool] = {}
 
@@ -97,6 +124,9 @@ class RadarFusionCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 targets_by_floor[floor_id] = []
             targets_by_floor[floor_id].append(target)
 
+        # Update heatmaps based on filtered targets
+        self._update_heatmaps(filtered_targets, now)
+
         return {
             "targets_by_floor": targets_by_floor,
             "all_targets": all_targets,
@@ -105,6 +135,123 @@ class RadarFusionCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "zone_count": len(self.zones),
             "block_zone_count": len(self.block_zones),
         }
+
+    def reset_heatmap(self, floor_id: str | None = None) -> None:
+        """Reset the all-time heatmap for a floor or all floors.
+
+        If floor_id is None, reset all floors.
+        """
+        if floor_id is None:
+            # Clear all
+            self._counts_alltime = {f: {} for f in self._counts_alltime}
+        else:
+            self._counts_alltime[floor_id] = {}
+
+        # Persist cleared maps
+        serializable: dict[str | None, dict[str, int]] = {}
+        for floor, mapping in self._counts_alltime.items():
+            serializable[floor if floor is not None else "None"] = {
+                f"{x}_{y}": int(c) for (x, y), c in mapping.items()
+            }
+
+        if self.config_entry is None:
+            _LOGGER.error("No config_entry available; cannot persist heatmap data")
+            return
+
+        new_options = {**self.config_entry.options, CONF_HEATMAPS_ALLTIME: serializable}
+        try:
+            self.hass.config_entries.async_update_entry(
+                self.config_entry, options=new_options
+            )
+        except Exception:
+            _LOGGER.exception("Failed to persist heatmap all-time data after reset")
+
+    def _bin_index(self, coord_mm: float) -> int:
+        """Get heatmap bin index for coordinate in millimeters."""
+        return int(coord_mm // HEATMAP_RES_MM)
+
+    def _update_heatmaps(self, targets: list[dict[str, Any]], now: datetime) -> None:
+        """Update hourly, 24h and all-time heatmaps with new detections."""
+        # Ensure floor entries exist
+        for t in targets:
+            floor = t.get("floor_id")
+            self._events_hourly.setdefault(floor, [])
+            self._events_24h.setdefault(floor, [])
+            self._counts_hourly.setdefault(floor, {})
+            self._counts_24h.setdefault(floor, {})
+            self._counts_alltime.setdefault(floor, {})
+
+            x_idx = (
+                self._bin_index(t["x"])
+                if isinstance(t.get("x"), (int, float))
+                else None
+            )
+            y_idx = (
+                self._bin_index(t["y"])
+                if isinstance(t.get("y"), (int, float))
+                else None
+            )
+            if x_idx is None or y_idx is None:
+                continue
+
+            # Append events
+            self._events_hourly[floor].append((now, x_idx, y_idx))
+            self._events_24h[floor].append((now, x_idx, y_idx))
+
+            # Increment counts
+            self._counts_hourly[floor][(x_idx, y_idx)] = (
+                self._counts_hourly[floor].get((x_idx, y_idx), 0) + 1
+            )
+            self._counts_24h[floor][(x_idx, y_idx)] = (
+                self._counts_24h[floor].get((x_idx, y_idx), 0) + 1
+            )
+            self._counts_alltime[floor][(x_idx, y_idx)] = (
+                self._counts_alltime[floor].get((x_idx, y_idx), 0) + 1
+            )
+
+        # Prune old events for hourly and 24h
+        cutoff_hourly = now - timedelta(seconds=HEATMAP_HOURLY_SECONDS)
+        cutoff_24h = now - timedelta(seconds=HEATMAP_24H_SECONDS)
+
+        for floor, events in list(self._events_hourly.items()):
+            while events and events[0][0] < cutoff_hourly:
+                _ts, xi, yi = events.pop(0)
+                key = (xi, yi)
+                if key in self._counts_hourly.get(floor, {}):
+                    self._counts_hourly[floor][key] -= 1
+                    if self._counts_hourly[floor][key] <= 0:
+                        del self._counts_hourly[floor][key]
+
+        for floor, events in list(self._events_24h.items()):
+            while events and events[0][0] < cutoff_24h:
+                _ts, xi, yi = events.pop(0)
+                key = (xi, yi)
+                if key in self._counts_24h.get(floor, {}):
+                    self._counts_24h[floor][key] -= 1
+                    if self._counts_24h[floor][key] <= 0:
+                        del self._counts_24h[floor][key]
+
+        # Persist all-time counts into config_entry.options
+        # Convert to serializable dict: floor -> {"x_y": count}
+        serializable: dict[str | None, dict[str, int]] = {}
+        for floor, mapping in self._counts_alltime.items():
+            serializable[floor if floor is not None else "None"] = {
+                f"{x}_{y}": int(c) for (x, y), c in mapping.items()
+            }
+
+        # Write options (merge with existing options)
+        if self.config_entry is None:
+            _LOGGER.error("No config_entry available; cannot persist heatmap data")
+            return
+
+        new_options = {**self.config_entry.options, CONF_HEATMAPS_ALLTIME: serializable}
+        try:
+            # Use async_update_entry to persist
+            self.hass.config_entries.async_update_entry(
+                self.config_entry, options=new_options
+            )
+        except Exception:
+            _LOGGER.exception("Failed to persist heatmap all-time data")
 
     def _process_all_targets(self, now: datetime) -> list[dict[str, Any]]:
         """Process all targets from all sensors."""
@@ -346,4 +493,19 @@ class RadarFusionCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 }
                 for t in targets
             ],
+            "heatmap": {
+                "resolution_mm": HEATMAP_RES_MM,
+                "hourly": {
+                    f"{x}_{y}": c
+                    for (x, y), c in self._counts_hourly.get(floor_id, {}).items()
+                },
+                "24h": {
+                    f"{x}_{y}": c
+                    for (x, y), c in self._counts_24h.get(floor_id, {}).items()
+                },
+                "all_time": {
+                    f"{x}_{y}": c
+                    for (x, y), c in self._counts_alltime.get(floor_id, {}).items()
+                },
+            },
         }
