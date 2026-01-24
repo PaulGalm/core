@@ -5423,6 +5423,12 @@
       "config_flow": true,
       "iot_class": "cloud_push"
     },
+    "radar_fusion": {
+      "name": "Radar Fusion",
+      "integration_type": "service",
+      "config_flow": true,
+      "iot_class": "calculated"
+    },
     "radarr": {
       "name": "Radarr",
       "integration_type": "service",
@@ -8004,12 +8010,6 @@
       "iot_class": "calculated"
     },
     "mold_indicator": {
-      "integration_type": "helper",
-      "config_flow": true,
-      "iot_class": "calculated"
-    },
-    "radar_fusion": {
-      "name": "Radar Fusion",
       "integration_type": "helper",
       "config_flow": true,
       "iot_class": "calculated"

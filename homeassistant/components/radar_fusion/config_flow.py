@@ -14,7 +14,7 @@ from homeassistant.config_entries import (
 )
 from homeassistant.const import CONF_NAME
 from homeassistant.core import callback
-from homeassistant.helpers import selector
+from homeassistant.helpers import entity_registry as er, selector
 
 from .const import (
     CONF_BLOCK_ZONES,
@@ -93,7 +93,27 @@ class RadarFusionOptionsFlow(OptionsFlow):
         self._sensors: list[dict[str, Any]] = []
         self._zones: list[dict[str, Any]] = []
         self._block_zones: list[dict[str, Any]] = []
-        self._edit_index: int | None = None
+            self._edit_index: int = -1  # -1 means unset
+
+    def _get_target_entities_from_device(self, device_id: str) -> list[str]:
+        """Get target entities from a device."""
+        entity_registry = er.async_get(self.hass)
+        target_entities = []
+
+        # Find all entities for this device
+        entities = er.async_entries_for_device(entity_registry, device_id)
+
+        # Look for target entities (target1_x, target1_y, target2_x, etc.)
+        for entity in entities:
+            if entity.domain == "sensor" and entity.entity_id:
+                entity_id = entity.entity_id
+                # Check if it matches the target pattern
+                if "target" in entity_id.lower() and entity_id.endswith(("_x", "_y")):
+                    target_entities.append(entity_id)
+
+        # Sort to ensure consistent order: target1_x, target1_y, target2_x, etc.
+        target_entities.sort()
+        return target_entities
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
@@ -123,9 +143,13 @@ class RadarFusionOptionsFlow(OptionsFlow):
 
         if user_input is not None:
             try:
-                # Validate target entities - should be 6 (3 targets × 2 coordinates)
-                target_entities = user_input[CONF_TARGET_ENTITIES]
-                if len(target_entities) != 6:
+                # Get device and auto-discover target entities
+                device_id = user_input["device_id"]
+                target_entities = self._get_target_entities_from_device(device_id)
+
+                if not target_entities:
+                    errors["base"] = "no_target_entities"
+                elif len(target_entities) != 6:
                     errors["base"] = "invalid_target_count"
                 else:
                     sensor_config = {
@@ -167,7 +191,123 @@ class RadarFusionOptionsFlow(OptionsFlow):
                             min=0, max=359, unit_of_measurement="degrees"
                         )
                     ),
-                    vol.Required(CONF_TARGET_ENTITIES): selector.EntitySelector(
+                    vol.Required("device_id"): selector.DeviceSelector(
+                        selector.DeviceSelectorConfig(
+                            entity=[
+                                selector.EntityFilterSelectorConfig(domain="sensor")
+                            ]
+                        )
+                    ),
+                }
+            ),
+            errors=errors,
+        )
+
+    async def async_step_edit_sensor(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Edit an existing sensor."""
+        self._sensors = self.config_entry.data.get(CONF_SENSORS, []).copy()
+
+        if not self._sensors:
+            return await self.async_step_sensors()
+
+        # First step: select which sensor to edit
+            if self._edit_index == -1:
+            if user_input is not None:
+                # Extract index from selection like "0: Floor None - Position..."
+                selected = user_input["sensor_index"]
+                self._edit_index = int(selected.split(":")[0])
+                return await self.async_step_edit_sensor_form()
+
+            sensor_options = [
+                f"{i}: Floor {s.get(CONF_FLOOR_ID, 'None')} - "
+                f"Position ({s.get(CONF_POSITION_X)}, {s.get(CONF_POSITION_Y)})"
+                for i, s in enumerate(self._sensors)
+            ]
+
+            return self.async_show_form(
+                step_id="edit_sensor",
+                data_schema=vol.Schema(
+                    {
+                        vol.Required("sensor_index"): selector.SelectSelector(
+                            selector.SelectSelectorConfig(options=sensor_options)
+                        ),
+                    }
+                ),
+            )
+
+        return await self.async_step_edit_sensor_form(user_input)
+
+    async def async_step_edit_sensor_form(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Edit sensor form with current values."""
+        errors = {}
+
+        if user_input is not None:
+            try:
+                # Validate target entities
+                target_entities = user_input[CONF_TARGET_ENTITIES]
+                if len(target_entities) != 6:
+                    errors["base"] = "invalid_target_count"
+                else:
+                    # Update the sensor at the edit index
+                    self._sensors[self._edit_index] = {
+                        CONF_FLOOR_ID: user_input.get(CONF_FLOOR_ID),
+                        CONF_POSITION_X: user_input[CONF_POSITION_X],
+                        CONF_POSITION_Y: user_input[CONF_POSITION_Y],
+                        CONF_ROTATION: user_input.get(CONF_ROTATION, 0),
+                        CONF_TARGET_ENTITIES: target_entities,
+                    }
+
+                    new_data = {**self.config_entry.data, CONF_SENSORS: self._sensors}
+                    self.hass.config_entries.async_update_entry(
+                        self.config_entry, data=new_data
+                    )
+
+                    self._edit_index = None
+                    return await self.async_step_sensors()
+            except (ValueError, KeyError):
+                errors["base"] = "invalid_input"
+
+        # Get current sensor values for defaults
+        if self._edit_index is None:
+            return await self.async_step_sensors()
+        current_sensor = self._sensors[self._edit_index]
+
+        return self.async_show_form(
+            step_id="edit_sensor_form",
+            data_schema=vol.Schema(
+                {
+                    vol.Optional(
+                        CONF_FLOOR_ID, default=current_sensor.get(CONF_FLOOR_ID)
+                    ): selector.FloorSelector(),
+                    vol.Required(
+                        CONF_POSITION_X, default=current_sensor.get(CONF_POSITION_X, 0)
+                    ): selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=-10000, max=10000, unit_of_measurement="mm"
+                        )
+                    ),
+                    vol.Required(
+                        CONF_POSITION_Y, default=current_sensor.get(CONF_POSITION_Y, 0)
+                    ): selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=-10000, max=10000, unit_of_measurement="mm"
+                        )
+                    ),
+                    vol.Optional(
+                        CONF_ROTATION, default=current_sensor.get(CONF_ROTATION, 0)
+                    ): selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=0, max=359, unit_of_measurement="degrees"
+                        )
+                    ),
+                    vol.Required(
+                        CONF_TARGET_ENTITIES,
+                        default=current_sensor.get(CONF_TARGET_ENTITIES, []),
+                    ): selector.EntitySelector(
                         selector.EntitySelectorConfig(
                             domain="sensor",
                             multiple=True,
@@ -188,7 +328,9 @@ class RadarFusionOptionsFlow(OptionsFlow):
             return await self.async_step_sensors()
 
         if user_input is not None:
-            sensor_index = int(user_input["sensor_index"])
+            # Extract index from selection like "0: Floor None - Position..."
+            selected = user_input["sensor_index"]
+            sensor_index = int(selected.split(":")[0])
             if 0 <= sensor_index < len(self._sensors):
                 self._sensors.pop(sensor_index)
                 new_data = {**self.config_entry.data, CONF_SENSORS: self._sensors}
@@ -219,7 +361,7 @@ class RadarFusionOptionsFlow(OptionsFlow):
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Manage zones."""
-        self._zones = self.config_entry.data.get(CONF_ZONES, []).copy()
+        self._zones = self.config_entry.options.get(CONF_ZONES, []).copy()
         return self.async_show_menu(
             step_id="zones",
             menu_options=["add_zone", "remove_zone"],
@@ -258,9 +400,14 @@ class RadarFusionOptionsFlow(OptionsFlow):
                         self._zones.append(zone_config)
 
                         # Update options
-                        return self.async_create_entry(
-                            data={**self.config_entry.data, CONF_ZONES: self._zones}
+                        new_options = {
+                            **self.config_entry.options,
+                            CONF_ZONES: self._zones,
+                        }
+                        self.hass.config_entries.async_update_entry(
+                            self.config_entry, options=new_options
                         )
+                        return await self.async_step_zones()
             except ValueError:
                 errors["base"] = "invalid_vertices"
 
@@ -285,18 +432,22 @@ class RadarFusionOptionsFlow(OptionsFlow):
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Remove a zone."""
-        self._zones = self.config_entry.data.get(CONF_ZONES, []).copy()
+        self._zones = self.config_entry.options.get(CONF_ZONES, []).copy()
 
         if not self._zones:
             return await self.async_step_zones()
 
         if user_input is not None:
-            zone_index = int(user_input["zone_index"])
+            # Extract index from selection like "0: Zone Name (Floor: None)"
+            selected = user_input["zone_index"]
+            zone_index = int(selected.split(":")[0])
             if 0 <= zone_index < len(self._zones):
                 self._zones.pop(zone_index)
-                return self.async_create_entry(
-                    data={**self.config_entry.data, CONF_ZONES: self._zones}
+                new_options = {**self.config_entry.options, CONF_ZONES: self._zones}
+                self.hass.config_entries.async_update_entry(
+                    self.config_entry, options=new_options
                 )
+            return await self.async_step_zones()
 
         zone_options = [
             f"{i}: {z.get(CONF_NAME)} (Floor: {z.get(CONF_FLOOR_ID, 'None')})"
@@ -319,7 +470,7 @@ class RadarFusionOptionsFlow(OptionsFlow):
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Manage block zones."""
-        self._block_zones = self.config_entry.data.get(CONF_BLOCK_ZONES, []).copy()
+        self._block_zones = self.config_entry.options.get(CONF_BLOCK_ZONES, []).copy()
         return self.async_show_menu(
             step_id="block_zones",
             menu_options=["add_block_zone", "remove_block_zone"],
@@ -356,12 +507,14 @@ class RadarFusionOptionsFlow(OptionsFlow):
                         }
                         self._block_zones.append(block_zone_config)
 
-                        return self.async_create_entry(
-                            data={
-                                **self.config_entry.data,
-                                CONF_BLOCK_ZONES: self._block_zones,
-                            }
+                        new_options = {
+                            **self.config_entry.options,
+                            CONF_BLOCK_ZONES: self._block_zones,
+                        }
+                        self.hass.config_entries.async_update_entry(
+                            self.config_entry, options=new_options
                         )
+                        return await self.async_step_block_zones()
             except ValueError:
                 errors["base"] = "invalid_vertices"
 
@@ -386,34 +539,38 @@ class RadarFusionOptionsFlow(OptionsFlow):
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Remove a block zone."""
-        self._block_zones = self.config_entry.data.get(CONF_BLOCK_ZONES, []).copy()
+        self._block_zones = self.config_entry.options.get(CONF_BLOCK_ZONES, []).copy()
 
-        if not self._block_zones:
-            return await self.async_step_block_zones()
+        if not self._sensors:
+            return await self.async_step_sensors()
 
-        if user_input is not None:
-            zone_index = int(user_input["zone_index"])
-            if 0 <= zone_index < len(self._block_zones):
-                self._block_zones.pop(zone_index)
-                return self.async_create_entry(
-                    data={**self.config_entry.data, CONF_BLOCK_ZONES: self._block_zones}
-                )
+        # First step: select which sensor to edit
+        if self._edit_index is None:
+            if user_input is not None:
+                # Extract index from selection like "0: Floor None - Position..."
+                selected = user_input["sensor_index"]
+                self._edit_index = int(selected.split(":")[0])
+                return await self.async_step_edit_sensor_form()
 
-        zone_options = [
-            f"{i}: {z.get(CONF_NAME)} (Floor: {z.get(CONF_FLOOR_ID, 'None')})"
-            for i, z in enumerate(self._block_zones)
-        ]
+            sensor_options = [
+                f"{i}: Floor {s.get(CONF_FLOOR_ID, 'None')} - "
+                f"Position ({s.get(CONF_POSITION_X)}, {s.get(CONF_POSITION_Y)})"
+                for i, s in enumerate(self._sensors)
+            ]
 
-        return self.async_show_form(
-            step_id="remove_block_zone",
-            data_schema=vol.Schema(
-                {
-                    vol.Required("zone_index"): selector.SelectSelector(
-                        selector.SelectSelectorConfig(options=zone_options)
-                    ),
-                }
-            ),
-        )
+            return self.async_show_form(
+                step_id="edit_sensor",
+                data_schema=vol.Schema(
+                    {
+                        vol.Required("sensor_index"): selector.SelectSelector(
+                            selector.SelectSelectorConfig(options=sensor_options)
+                        ),
+                    }
+                ),
+            )
+
+        # mypy: _edit_index is guaranteed to be int here
+        return await self.async_step_edit_sensor_form(user_input)
 
     # Settings
     async def async_step_settings(
@@ -421,9 +578,11 @@ class RadarFusionOptionsFlow(OptionsFlow):
     ) -> ConfigFlowResult:
         """Manage settings."""
         if user_input is not None:
-            return self.async_create_entry(
-                data={**self.config_entry.data, **user_input}
+            new_options = {**self.config_entry.options, **user_input}
+            self.hass.config_entries.async_update_entry(
+                self.config_entry, options=new_options
             )
+            return await self.async_step_init()
 
         return self.async_show_form(
             step_id="settings",
@@ -431,7 +590,7 @@ class RadarFusionOptionsFlow(OptionsFlow):
                 {
                     vol.Required(
                         CONF_STALENESS_TIMEOUT,
-                        default=self.config_entry.data.get(
+                        default=self.config_entry.options.get(
                             CONF_STALENESS_TIMEOUT, DEFAULT_STALENESS_TIMEOUT
                         ),
                     ): selector.NumberSelector(

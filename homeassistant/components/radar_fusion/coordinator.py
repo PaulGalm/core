@@ -122,7 +122,9 @@ class RadarFusionCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
             for entity_id in target_entities:
                 # Parse entity to determine target number and coordinate
-                # Expected format: sensor.ld2450_target1_x
+                # Expected formats:
+                # - sensor.ld2450_target1_x
+                # - sensor.test_radar_1_target_1_x (with underscores)
                 parts = entity_id.split("_")
                 if len(parts) < 2:
                     continue
@@ -131,7 +133,15 @@ class RadarFusionCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 target_num = None
                 coord_type = None
                 for i, part in enumerate(parts):
-                    if part.startswith("target") and len(part) > 6:
+                    # Look for "target" followed by a number (with or without underscore)
+                    if part == "target" and i + 1 < len(parts):
+                        # Next part should be the number
+                        try:
+                            target_num = int(parts[i + 1])
+                        except ValueError:
+                            continue
+                    elif part.startswith("target"):
+                        # target1, target2, etc. (no underscore)
                         try:
                             target_num = int(part[6:])
                         except ValueError:
@@ -199,6 +209,7 @@ class RadarFusionCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         "age_seconds": (
                             now - target_data.get("last_update", now)
                         ).total_seconds(),
+                        "sensor_entities": target_entities,
                     }
                 )
 
@@ -285,6 +296,15 @@ class RadarFusionCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "position_x": s.get(CONF_POSITION_X),
                 "position_y": s.get(CONF_POSITION_Y),
                 "rotation": s.get(CONF_ROTATION),
+                "target_entities": s.get(CONF_TARGET_ENTITIES),
+                "target_count": sum(
+                    1
+                    for t in targets
+                    if any(
+                        e in s.get(CONF_TARGET_ENTITIES, [])
+                        for e in t.get("sensor_entities", [])
+                    )
+                ),
             }
             for s in self.sensors
             if s.get(CONF_FLOOR_ID) == floor_id
@@ -318,7 +338,12 @@ class RadarFusionCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "zones": floor_zones,
             "block_zones": floor_block_zones,
             "targets": [
-                {"x": t["x"], "y": t["y"], "age_seconds": t["age_seconds"]}
+                {
+                    "x": t["x"],
+                    "y": t["y"],
+                    "age": t["age_seconds"],
+                    "sensor_entities": t.get("sensor_entities", []),
+                }
                 for t in targets
             ],
         }

@@ -7,8 +7,9 @@
       "duplicate_zone_name": "Zone name already exists on this floor",
       "insufficient_vertices": "Zone must have at least 3 vertices",
       "invalid_input": "Invalid input provided",
-      "invalid_target_count": "Must select exactly 6 target entities (3 targets with X and Y coordinates)",
-      "invalid_vertices": "Invalid vertex format. Use [[x,y], [x,y], ...] or space-separated x,y pairs"
+      "invalid_target_count": "Device must have exactly 6 target entities (3 targets with X and Y coordinates)",
+      "invalid_vertices": "Invalid vertex format. Use [[x,y], [x,y], ...] or space-separated x,y pairs",
+      "no_target_entities": "No target entities found on selected device. Ensure the device has target coordinate sensors."
     },
     "step": {
       "user": {
@@ -43,7 +44,8 @@
       "insufficient_vertices": "[%key:component::radar_fusion::config::error::insufficient_vertices%]",
       "invalid_input": "[%key:component::radar_fusion::config::error::invalid_input%]",
       "invalid_target_count": "[%key:component::radar_fusion::config::error::invalid_target_count%]",
-      "invalid_vertices": "[%key:component::radar_fusion::config::error::invalid_vertices%]"
+      "invalid_vertices": "[%key:component::radar_fusion::config::error::invalid_vertices%]",
+      "no_target_entities": "[%key:component::radar_fusion::config::error::no_target_entities%]"
     },
     "step": {
       "add_block_zone": {
@@ -62,20 +64,20 @@
       },
       "add_sensor": {
         "data": {
+          "device_id": "LD2450 Device",
           "floor_id": "Floor",
           "position_x": "Position X",
           "position_y": "Position Y",
-          "rotation": "Rotation",
-          "target_entities": "Target coordinate entities"
+          "rotation": "Rotation"
         },
         "data_description": {
+          "device_id": "Select the ESPHome device with LD2450 sensor",
           "floor_id": "Floor where sensor is installed",
           "position_x": "X coordinate of sensor in millimeters",
           "position_y": "Y coordinate of sensor in millimeters",
-          "rotation": "Sensor rotation in degrees (0-359)",
-          "target_entities": "Select 6 entities: target1_x, target1_y, target2_x, target2_y, target3_x, target3_y"
+          "rotation": "Sensor rotation in degrees (0-359)"
         },
-        "description": "Add an ESPHome LD2450 sensor to the fusion system. Configure its position and rotation on the floor.",
+        "description": "Add an ESPHome LD2450 sensor to the fusion system. The integration will automatically detect target entities from the selected device.",
         "title": "Add Sensor"
       },
       "add_zone": {
