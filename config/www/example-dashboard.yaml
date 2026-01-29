@@ -1,0 +1,71 @@
+# Example Lovelace Dashboard for Radar Fusion Card
+
+views:
+  - title: Radar Fusion
+    path: radar-fusion
+    icon: mdi:radar
+    cards:
+      # Main radar visualization
+      - type: custom:radar-fusion-card
+        title: Radar Fusion Overview
+        width: 1000
+        height: 800
+        grid_size: 5000  # 5 meters
+        show_grid: true
+
+      # Stats cards
+      - type: horizontal-stack
+        cards:
+          - type: entity
+            entity: binary_sensor.radar_fusion_zone_living_room
+            name: Living Room
+            icon: mdi:motion-sensor
+
+          - type: entity
+            entity: binary_sensor.radar_fusion_zone_kitchen
+            name: Kitchen
+            icon: mdi:motion-sensor
+
+          - type: entity
+            entity: binary_sensor.radar_fusion_zone_hallway
+            name: Hallway
+            icon: mdi:motion-sensor
+
+      # Block zone toggles
+      - type: entities
+        title: Block Zones
+        entities:
+          - entity: switch.radar_fusion_furniture_block
+            name: Block Furniture Area
+          - entity: switch.radar_fusion_outdoor_block
+            name: Block Outdoor Reflections
+
+      # Service call for diagnostics
+      - type: button
+        name: View Diagnostics
+        tap_action:
+          action: call-service
+          service: system_log.write
+          service_data:
+            message: "Radar Fusion diagnostics requested"
+            level: info
+
+# Alternative: Compact card for sidebar
+# - type: custom:radar-fusion-card
+#   title: Radar
+#   width: 400
+#   height: 300
+#   show_grid: false
+
+# Alternative: Multi-floor setup
+# - type: custom:radar-fusion-card
+#   floor_id: ground_floor
+#   title: Ground Floor
+#   width: 800
+#   height: 600
+#
+# - type: custom:radar-fusion-card
+#   floor_id: first_floor
+#   title: First Floor
+#   width: 800
+#   height: 600
