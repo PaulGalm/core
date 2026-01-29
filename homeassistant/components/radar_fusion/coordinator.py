@@ -38,8 +38,15 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 
-class RadarFusionCoordinator(DataUpdateCoordinator[dict[str, Any]]):
+class RadarFusionCoordinator(DataUpdateCoordinator):
     """Coordinator to manage radar fusion data."""
+
+    @property
+    def test_mode(self):
+        """Return whether test mode is enabled."""
+        if self.config_entry is None:
+            return False
+        return self.config_entry.options.get("test_mode", False)
 
     def __init__(
         self,
@@ -55,12 +62,10 @@ class RadarFusionCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             config_entry=config_entry,
         )
 
-        self.sensors: list[dict[str, Any]] = config_entry.data.get(CONF_SENSORS, [])
-        self.zones: list[dict[str, Any]] = config_entry.options.get(CONF_ZONES, [])
-        self.block_zones: list[dict[str, Any]] = config_entry.options.get(
-            CONF_BLOCK_ZONES, []
-        )
-        self.staleness_timeout: int = config_entry.options.get(
+        self.sensors = config_entry.data.get(CONF_SENSORS, [])
+        self.zones = config_entry.options.get(CONF_ZONES, [])
+        self.block_zones = config_entry.options.get(CONF_BLOCK_ZONES, [])
+        self.staleness_timeout = config_entry.options.get(
             CONF_STALENESS_TIMEOUT, DEFAULT_STALENESS_TIMEOUT
         )
 
@@ -94,8 +99,14 @@ class RadarFusionCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Track block zone states (entity_id -> is_on)
         self._block_zone_states: dict[str, bool] = {}
 
+        # Test mode target tracking
+        self._test_targets: list[dict[str, Any]] | None = None
+        self._test_target_state: dict[
+            int, dict[str, Any]
+        ] = {}  # Track velocity and state for each test target
+
         # Store all entity IDs to track
-        self._tracked_entities: set[str] = set()
+        self._tracked_entities = set()
         for sensor in self.sensors:
             self._tracked_entities.update(sensor.get(CONF_TARGET_ENTITIES, []))
 
@@ -207,6 +218,15 @@ class RadarFusionCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
             self._counts_alltime[floor][(x_idx, y_idx)] = (
                 self._counts_alltime[floor].get((x_idx, y_idx), 0) + 1
+            )
+
+            # Debug log
+            _LOGGER.debug(
+                "Heatmap updated for floor %s: (%d, %d) all-time=%d",
+                floor,
+                x_idx,
+                y_idx,
+                self._counts_alltime[floor][(x_idx, y_idx)],
             )
 
         # Prune old events for hourly and 24h
@@ -436,6 +456,191 @@ class RadarFusionCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def get_floor_data(self, floor_id: str | None) -> dict[str, Any]:
         """Get all data for a specific floor (for service call)."""
+        if self.test_mode:
+            # Serve mock/test data with realistic moving targets
+            import math  # noqa: PLC0415
+            import random  # noqa: PLC0415
+
+            # Initialize test targets on first call
+            if self._test_targets is None:
+                self._test_targets = [
+                    {
+                        "id": 1,
+                        "x": 0,
+                        "y": 0,
+                        "vx": random.uniform(-200, 200),  # mm/s
+                        "vy": random.uniform(-200, 200),
+                        "ax": random.uniform(-50, 50),  # acceleration
+                        "ay": random.uniform(-50, 50),
+                        "behavior": "wandering",  # wandering, circular, zigzag
+                    },
+                    {
+                        "id": 2,
+                        "x": 2000,
+                        "y": 1000,
+                        "vx": random.uniform(-300, 300),
+                        "vy": random.uniform(-300, 300),
+                        "ax": random.uniform(-80, 80),
+                        "ay": random.uniform(-80, 80),
+                        "behavior": "fast",
+                    },
+                    {
+                        "id": 3,
+                        "x": -500,
+                        "y": 500,
+                        "vx": random.uniform(-100, 100),
+                        "vy": random.uniform(-100, 100),
+                        "ax": 0,
+                        "ay": 0,
+                        "behavior": "slow",
+                    },
+                ]
+
+            # Update test target positions with physics-like movement
+            if self._test_targets is None:
+                return {}
+            for target in self._test_targets:
+                # Update velocity based on acceleration
+                target["vx"] += target["ax"]
+                target["vy"] += target["ay"]
+
+                # Add random jitter to acceleration
+                if random.random() < 0.1:  # 10% chance per update
+                    target["ax"] += random.uniform(-30, 30)
+                    target["ay"] += random.uniform(-30, 30)
+                    # Clamp acceleration
+                    target["ax"] = max(-100, min(100, target["ax"]))
+                    target["ay"] = max(-100, min(100, target["ay"]))
+
+                # Clamp velocity
+                max_velocity = (
+                    400
+                    if target["behavior"] == "fast"
+                    else (100 if target["behavior"] == "slow" else 250)
+                )
+                speed = math.sqrt(target["vx"] ** 2 + target["vy"] ** 2)
+                if speed > max_velocity:
+                    scale = max_velocity / (speed + 0.001)
+                    target["vx"] *= scale
+                    target["vy"] *= scale
+
+                # Update position
+                target["x"] += target["vx"] * 0.1  # 100ms update
+                target["y"] += target["vy"] * 0.1
+
+                # Boundary conditions - bounce off zone edges
+                if abs(target["x"]) > 2000:
+                    target["x"] = max(-2000, min(2000, target["x"]))
+                    target["vx"] *= -0.8  # Bounce with friction
+                    target["ax"] *= -0.5
+
+                if abs(target["y"]) > 1500:
+                    target["y"] = max(-1500, min(1500, target["y"]))
+                    target["vy"] *= -0.8  # Bounce with friction
+                    target["ay"] *= -0.5
+
+                # Occasionally add sudden direction changes (realistic)
+                if random.random() < 0.05:  # 5% chance per update
+                    if target["behavior"] == "wandering":
+                        target["vx"] = random.uniform(-300, 300)
+                        target["vy"] = random.uniform(-300, 300)
+                    elif target["behavior"] == "zigzag":
+                        target["vx"] = (
+                            target["vx"] * -1 if random.random() > 0.5 else target["vx"]
+                        )
+                        target["vy"] = (
+                            target["vy"] * -1 if random.random() > 0.5 else target["vy"]
+                        )
+                    elif target["behavior"] == "circular":
+                        angle = math.atan2(target["y"], target["x"])
+                        speed = math.sqrt(target["vx"] ** 2 + target["vy"] ** 2)
+                        target["vx"] = math.cos(angle + 0.3) * speed
+                        target["vy"] = math.sin(angle + 0.3) * speed
+
+            sensors = [
+                {
+                    "position_x": 0,
+                    "position_y": 0,
+                    "rotation": 0,
+                    "target_entities": ["sensor.test1_x", "sensor.test1_y"],
+                    "target_count": 1,
+                },
+                {
+                    "position_x": 2000,
+                    "position_y": 1000,
+                    "rotation": 45,
+                    "target_entities": ["sensor.test2_x", "sensor.test2_y"],
+                    "target_count": 1,
+                },
+            ]
+            zones = [
+                {
+                    "name": "TestZone",
+                    "vertices": [
+                        [-1000, -1000],
+                        [1000, -1000],
+                        [1000, 1000],
+                        [-1000, 1000],
+                    ],
+                }
+            ]
+            block_zones = [
+                {
+                    "name": "BlockA",
+                    "vertices": [[1500, 500], [2500, 500], [2500, 1500], [1500, 1500]],
+                    "enabled": True,
+                }
+            ]
+
+            # Convert test targets to output format (with floor_id for heatmap update)
+            targets: list[dict[str, Any]] = [
+                {
+                    "x": t["x"],
+                    "y": t["y"],
+                    "age": random.uniform(0, 2),  # Random age for variety
+                    "age_seconds": random.uniform(0, 2),
+                    "floor_id": floor_id,  # Add floor_id for heatmap tracking
+                    "sensor_entities": ["sensor.test1_x", "sensor.test1_y"]
+                    if t["id"] == 1
+                    else ["sensor.test2_x", "sensor.test2_y"],
+                }
+                for t in self._test_targets
+            ]
+
+            # Update heatmaps with target detections (same as real mode)
+            self._update_heatmaps(targets, datetime.now())
+
+            # Return actual heatmap data from accumulated counts
+            heatmap_data: dict[str, Any] = {
+                "resolution_mm": HEATMAP_RES_MM,
+                "hourly": {
+                    f"{x}_{y}": c
+                    for (x, y), c in self._counts_hourly.get(floor_id, {}).items()
+                },
+                "24h": {
+                    f"{x}_{y}": c
+                    for (x, y), c in self._counts_24h.get(floor_id, {}).items()
+                },
+                "all_time": {
+                    f"{x}_{y}": c
+                    for (x, y), c in self._counts_alltime.get(floor_id, {}).items()
+                },
+            }
+
+            _LOGGER.debug(
+                "Test mode returning heatmap for floor %s",
+                floor_id,
+            )
+
+            return {
+                "floor_id": floor_id,
+                "sensors": sensors,
+                "zones": zones,
+                "block_zones": block_zones,
+                "targets": targets,
+                "heatmap": heatmap_data,
+            }
+
         targets = self.get_targets_for_floor(floor_id)
 
         floor_sensors = [

@@ -7,6 +7,9 @@ import math
 import re
 from typing import Any
 
+# Option for test mode
+CONF_TEST_MODE = "test_mode"
+
 DOMAIN = "radar_fusion"
 
 # Configuration keys

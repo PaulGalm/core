@@ -11,7 +11,50 @@ class RadarFusionCard extends HTMLElement {
       '#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A', '#98D8C8',
       '#F7DC6F', '#BB8FCE', '#85C1E2', '#F8B739', '#52B788'
     ];
-    this._heatmapScale = 'hourly'; // 'hourly' | '24h' | 'all_time'
+    this._heatmapScale = 'hourly';
+    this._updateInterval = null;
+    this._updateFrequency = 1000; // Slower fetch
+    this._lastTargetHash = null; // Only compare targets
+    this._pendingData = null;
+    this._animationFrameId = null;
+  }
+
+  connectedCallback() {
+    // Start polling when card is added to DOM
+    this.startPolling();
+  }
+
+  disconnectedCallback() {
+    // Stop polling when card is removed from DOM
+    this.stopPolling();
+  }
+
+  startPolling() {
+    if (this._updateInterval) return;
+    this._updateInterval = setInterval(async () => {
+      if (this._hass && this._config.config_entry_id) {
+        const newData = await this.getFloorData();
+        if (!newData) return;
+
+        // Hash only targets and block_zones (things that actually change frequently)
+        const targetHash = JSON.stringify(newData.targets?.map(t => [t.x, t.y, t.age]) || []);
+
+        if (targetHash !== this._lastTargetHash) {
+          this._lastTargetHash = targetHash;
+          this._pendingData = newData;
+          // Use requestAnimationFrame for smooth rendering
+          if (this._animationFrameId) cancelAnimationFrame(this._animationFrameId);
+          this._animationFrameId = requestAnimationFrame(() => this.drawRadar());
+        }
+      }
+    }, this._updateFrequency);
+  }
+
+  stopPolling() {
+    if (this._updateInterval) {
+      clearInterval(this._updateInterval);
+      this._updateInterval = null;
+    }
   }
 
   setConfig(config) {
@@ -23,7 +66,23 @@ class RadarFusionCard extends HTMLElement {
       show_grid: config.show_grid !== false,
       floor_id: config.floor_id || null,
       title: config.title || 'Radar Fusion',
+      floorplan_url: config.floorplan_url || null,
+      floorplan_width_mm: config.floorplan_width_mm || null,  // Physical width of floorplan in mm
+      floorplan_height_mm: config.floorplan_height_mm || null,  // Physical height of floorplan in mm
+      offset_x: config.offset_x || 0,  // Shift in mm
+      offset_y: config.offset_y || 0,  // Shift in mm
     };
+    // Load floorplan image if provided
+    if (this._config.floorplan_url) {
+      const img = new Image();
+      img.onload = () => {
+        this._floorplanImage = img;
+        // Re-render when image loads to apply correct dimensions
+        this.render();
+      };
+      img.onerror = () => { console.warn('Failed to load floorplan image'); };
+      img.src = this._config.floorplan_url;
+    }
   }
 
   async discoverConfigEntry() {
@@ -65,6 +124,7 @@ class RadarFusionCard extends HTMLElement {
   set hass(hass) {
     this._hass = hass;
     this.updateCard();
+    this.startPolling();
   }
 
   async updateCard() {
@@ -83,6 +143,20 @@ class RadarFusionCard extends HTMLElement {
   }
 
   render() {
+    // Calculate canvas dimensions based on floorplan if provided
+    let canvasWidth = this._config.width;
+    let canvasHeight = this._config.height;
+
+    if (this._floorplanImage && this._config.floorplan_width_mm && this._config.floorplan_height_mm) {
+      // Use explicit dimensions
+      const aspect = this._config.floorplan_width_mm / this._config.floorplan_height_mm;
+      canvasHeight = Math.round(canvasWidth / aspect);
+    } else if (this._floorplanImage && this._config.floorplan_width_mm) {
+      // Calculate from image aspect ratio
+      const imgAspect = this._floorplanImage.width / this._floorplanImage.height;
+      canvasHeight = Math.round(canvasWidth / imgAspect);
+    }
+
     const style = `
       <style>
         :host {
@@ -124,11 +198,12 @@ class RadarFusionCard extends HTMLElement {
           background: #1a1a1a;
           position: relative;
           width: 100%;
+          aspect-ratio: ${canvasWidth} / ${canvasHeight};
         }
         canvas {
           display: block;
           width: 100%;
-          height: auto;
+          height: 100%;
         }
         .legend {
           margin-top: 12px;
@@ -160,12 +235,6 @@ class RadarFusionCard extends HTMLElement {
       <div class="card-header">
         <div class="card-title">${this._config.title}</div>
         <div class="controls">
-            <select id="heatmap-scale" class="toggle-btn">
-              <option value="hourly">Heatmap: hourly</option>
-              <option value="24h">Heatmap: 24h</option>
-              <option value="all_time">Heatmap: all-time</option>
-            </select>
-            <button class="toggle-btn" id="reset-heatmap">Reset heatmap</button>
           <button class="toggle-btn ${this._showZones ? 'active' : ''}" id="toggle-zones">
             Zones
           </button>
@@ -178,7 +247,7 @@ class RadarFusionCard extends HTMLElement {
         </div>
       </div>
       <div class="canvas-container">
-        <canvas id="radarCanvas" width="${this._config.width}" height="${this._config.height}"></canvas>
+        <canvas id="radarCanvas" width="${canvasWidth}" height="${canvasHeight}"></canvas>
       </div>
       <div class="legend" id="legend"></div>
       <div class="stats" id="stats"></div>
@@ -200,108 +269,119 @@ class RadarFusionCard extends HTMLElement {
       this.updateCard();
     });
 
-    // Heatmap controls
-    this.shadowRoot.getElementById('heatmap-scale').value = this._heatmapScale;
-    this.shadowRoot.getElementById('heatmap-scale').addEventListener('change', (ev) => {
-      this._heatmapScale = ev.target.value;
-      this.updateCard();
-    });
-    this.shadowRoot.getElementById('reset-heatmap').addEventListener('click', async () => {
-      await this.resetHeatmap();
-      this.updateCard();
-    });
-
     this.drawRadar();
   }
 
   async drawRadar() {
     const canvas = this.shadowRoot.getElementById('radarCanvas');
-    const statsEl = this.shadowRoot.getElementById('stats');
-
     if (!canvas) return;
+
+    const data = this._pendingData;
+    if (!data) return;
 
     const ctx = canvas.getContext('2d');
     const width = canvas.width;
     const height = canvas.height;
 
-    // Clear canvas
+    // Clear canvas only
     ctx.fillStyle = '#1a1a1a';
     ctx.fillRect(0, 0, width, height);
 
-    // Get data from service call
-    const data = await this.getFloorData();
+    let gridSize = this._config.grid_size;
+    let scale = Math.min(width / gridSize, height / gridSize) * 0.9;
+    let actualGridHeight = gridSize;  // For calculating origin positioning
 
-    console.log('Floor data received:', JSON.stringify(data, null, 2));
+    // If floorplan is provided and has dimensions metadata, scale according to floorplan
+    if (this._floorplanImage && this._config.floorplan_width_mm) {
+      const floorplanPhysicalWidth = this._config.floorplan_width_mm;
+      const floorplanPhysicalHeight = this._config.floorplan_height_mm ||
+        (this._floorplanImage.height / this._floorplanImage.width) * floorplanPhysicalWidth;
 
-    if (!data) {
-      // Show message on canvas
-      ctx.fillStyle = '#999';
-      ctx.font = '16px sans-serif';
-      ctx.textAlign = 'center';
-      ctx.fillText('Unable to load radar data', width / 2, height / 2 - 20);
-      ctx.font = '14px sans-serif';
-      ctx.fillText('Check console for errors', width / 2, height / 2 + 10);
-      if (statsEl) statsEl.textContent = 'No data available';
-      return;
+      gridSize = floorplanPhysicalWidth;
+      actualGridHeight = floorplanPhysicalHeight;
+
+      // Calculate scale based on canvas and floorplan dimensions
+      const canvasAspect = width / height;
+      const floorplanAspect = floorplanPhysicalWidth / floorplanPhysicalHeight;
+
+      let scale_x = (width * 0.9) / floorplanPhysicalWidth;
+      let scale_y = (height * 0.9) / floorplanPhysicalHeight;
+
+      // Use the smaller scale to fit the entire floorplan
+      scale = Math.min(scale_x, scale_y);
     }
 
-    // Check if there's any configuration
-    const hasSensors = data.sensors && data.sensors.length > 0;
-    const hasZones = data.zones && data.zones.length > 0;
+    // Origin at lower-left corner (0,0 = lower-left, not center)
+    const originX = width * 0.05;  // 5% margin from left
+    const originY = height * 0.95; // 5% margin from bottom
 
-    if (!hasSensors && !hasZones) {
-      ctx.fillStyle = '#ff9800';
-      ctx.font = '18px sans-serif';
-      ctx.textAlign = 'center';
-      ctx.fillText('⚙️ Setup Required', width / 2, height / 2 - 40);
-      ctx.font = '14px sans-serif';
-      ctx.fillStyle = '#999';
-      ctx.fillText('No sensors or zones configured', width / 2, height / 2 - 10);
-      ctx.fillText('Go to Settings → Devices & Services', width / 2, height / 2 + 15);
-      ctx.fillText('Click "Configure" on Radar Fusion', width / 2, height / 2 + 40);
-      if (statsEl) statsEl.textContent = 'Please add sensors and zones in the integration settings';
-      return;
-    }
-
-    const gridSize = this._config.grid_size;
-    const scale = Math.min(width / gridSize, height / gridSize) * 0.9;
-    const offsetX = width / 2;
-    const offsetY = height / 2;
-
-    // Helper function to convert mm coordinates to canvas
+    // Helper function to convert mm coordinates to canvas (0,0 at lower-left)
     const toCanvas = (x, y) => ({
-      x: offsetX + x * scale,
-      y: offsetY - y * scale, // Invert Y for canvas
+      x: originX + (x + this._config.offset_x) * scale,
+      y: originY - (y + this._config.offset_y) * scale, // Invert Y for canvas
     });
+
+    // Draw floorplan background if provided (maintain aspect ratio)
+    if (this._floorplanImage) {
+      const imgWidth = this._floorplanImage.width;
+      const imgHeight = this._floorplanImage.height;
+      const imgAspect = imgWidth / imgHeight;
+      const canvasAspect = width / height;
+      let drawWidth, drawHeight, drawX, drawY;
+
+      if (imgAspect > canvasAspect) {
+        // Image is wider, fit to height
+        drawHeight = height;
+        drawWidth = drawHeight * imgAspect;
+      } else {
+        // Image is taller, fit to width
+        drawWidth = width;
+        drawHeight = drawWidth / imgAspect;
+      }
+
+      // Center the image
+      drawX = (width - drawWidth) / 2;
+      drawY = (height - drawHeight) / 2;
+
+      ctx.drawImage(this._floorplanImage, drawX, drawY, drawWidth, drawHeight);
+    }
 
     // Draw grid
     if (this._config.show_grid) {
       ctx.strokeStyle = '#2a2a2a';
       ctx.lineWidth = 1;
       const gridStep = 1000; // 1 meter
-      for (let x = -gridSize / 2; x <= gridSize / 2; x += gridStep) {
+
+      // Draw vertical grid lines (X axis)
+      for (let x = 0; x <= gridSize; x += gridStep) {
         const pos = toCanvas(x, 0);
         ctx.beginPath();
-        ctx.moveTo(pos.x, 0);
-        ctx.lineTo(pos.x, height);
+        ctx.moveTo(pos.x, originY);
+        ctx.lineTo(pos.x, originY - gridSize * scale);
         ctx.stroke();
       }
-      for (let y = -gridSize / 2; y <= gridSize / 2; y += gridStep) {
+
+      // Draw horizontal grid lines (Y axis)
+      for (let y = 0; y <= gridSize; y += gridStep) {
         const pos = toCanvas(0, y);
         ctx.beginPath();
-        ctx.moveTo(0, pos.y);
-        ctx.lineTo(width, pos.y);
+        ctx.moveTo(originX, pos.y);
+        ctx.lineTo(originX + gridSize * scale, pos.y);
         ctx.stroke();
       }
 
       // Draw center axes
       ctx.strokeStyle = '#3a3a3a';
       ctx.lineWidth = 2;
+      // Draw X axis (horizontal at originY)
       ctx.beginPath();
-      ctx.moveTo(offsetX, 0);
-      ctx.lineTo(offsetX, height);
-      ctx.moveTo(0, offsetY);
-      ctx.lineTo(width, offsetY);
+      ctx.moveTo(originX, originY);
+      ctx.lineTo(originX + gridSize * scale, originY);
+      ctx.stroke();
+      // Draw Y axis (vertical at originX)
+      ctx.beginPath();
+      ctx.moveTo(originX, originY);
+      ctx.lineTo(originX, originY - gridSize * scale);
       ctx.stroke();
     }
 
@@ -490,38 +570,7 @@ class RadarFusionCard extends HTMLElement {
       });
     }
 
-    // Draw heatmap overlay (after targets so it shows beneath if desired)
-    if (data.heatmap) {
-      const heatmapData = data.heatmap;
-      const timeline = this._heatmapScale === 'hourly' ? heatmapData.hourly : (this._heatmapScale === '24h' ? heatmapData['24h'] : heatmapData.all_time);
-      const entries = Object.entries(timeline || {});
-      if (entries.length > 0) {
-        // Determine max for normalization
-        let maxCount = 0;
-        entries.forEach(([k, v]) => { if (v > maxCount) maxCount = v; });
-        ctx.save();
-        ctx.globalCompositeOperation = 'lighter';
-        entries.forEach(([k, v]) => {
-          const parts = k.split('_');
-          const xi = parseInt(parts[0], 10);
-          const yi = parseInt(parts[1], 10);
-          const xCenter = (xi + 0.5) * (this._config.grid_size / (this._config.grid_size / (this._config.grid_size))); // placeholder mm calc
-          const yCenter = (yi + 0.5) * (this._config.grid_size / (this._config.grid_size / (this._config.grid_size)));
-          // Better: compute center from bin*HEATMAP_RES_MM
-          const RES_MM = (heatmapData.resolution_mm || 500);
-          const cx_mm = (xi + 0.5) * RES_MM;
-          const cy_mm = (yi + 0.5) * RES_MM;
-          const cpos = toCanvas(cx_mm, cy_mm);
-          const size = RES_MM * scale;
-          const intensity = Math.min(1, (v / Math.max(1, maxCount)));
-          // Color from green->red
-          const hue = (1 - intensity) * 120; // 120 green -> 0 red
-          ctx.fillStyle = `hsla(${hue}, 100%, 50%, ${0.25 * intensity + 0.05})`;
-          ctx.fillRect(cpos.x - size / 2, cpos.y - size / 2, size, size);
-        });
-        ctx.restore();
-      }
-    }
+    // ...heatmap overlay removed: now handled by standalone card...
 
     // Update stats
     const totalTargets = data.targets?.length || 0;

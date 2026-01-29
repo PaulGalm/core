@@ -25,6 +25,7 @@ from .const import (
     CONF_SENSORS,
     CONF_STALENESS_TIMEOUT,
     CONF_TARGET_ENTITIES,
+    CONF_TEST_MODE,
     CONF_VERTICES,
     CONF_ZONES,
     DEFAULT_NAME,
@@ -57,6 +58,7 @@ class RadarFusionConfigFlow(ConfigFlow, domain=DOMAIN):
                     CONF_STALENESS_TIMEOUT: user_input.get(
                         CONF_STALENESS_TIMEOUT, DEFAULT_STALENESS_TIMEOUT
                     ),
+                    CONF_TEST_MODE: user_input.get(CONF_TEST_MODE, False),
                 },
             )
 
@@ -72,6 +74,9 @@ class RadarFusionConfigFlow(ConfigFlow, domain=DOMAIN):
                             min=1, max=300, unit_of_measurement="seconds"
                         )
                     ),
+                    vol.Optional(
+                        CONF_TEST_MODE, default=False
+                    ): selector.BooleanSelector(),
                 }
             ),
         )
@@ -609,6 +614,10 @@ class RadarFusionOptionsFlow(OptionsFlow):
                             min=1, max=300, unit_of_measurement="seconds"
                         )
                     ),
+                    vol.Optional(
+                        CONF_TEST_MODE,
+                        default=self.config_entry.options.get(CONF_TEST_MODE, False),
+                    ): selector.BooleanSelector(),
                 }
             ),
         )

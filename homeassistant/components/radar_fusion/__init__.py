@@ -8,9 +8,25 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.typing import ConfigType
 
-from .const import CONF_FLOOR_ID, DOMAIN, SERVICE_GET_FLOOR_DATA, SERVICE_RESET_HEATMAP
+from .const import (
+    CONF_FLOOR_ID,
+    CONF_TEST_MODE,
+    DOMAIN,
+    SERVICE_GET_FLOOR_DATA,
+    SERVICE_RESET_HEATMAP,
+)
 from .coordinator import RadarFusionCoordinator
+
+SERVICE_SET_TEST_MODE = "set_test_mode"
+
+SERVICE_SET_TEST_MODE_SCHEMA = vol.Schema(
+    {
+        vol.Required("config_entry_id"): cv.string,
+        vol.Required("enabled"): cv.boolean,
+    }
+)
 
 PLATFORMS = [Platform.BINARY_SENSOR, Platform.SWITCH]
 
@@ -71,8 +87,29 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return unload_ok
 
 
+async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
+    """Set up the Radar Fusion integration (register services globally)."""
+    await async_register_services(hass)
+    return True
+
+
 async def async_register_services(hass: HomeAssistant) -> None:
     """Register services for Radar Fusion."""
+
+    async def handle_set_test_mode(call: ServiceCall) -> None:
+        """Handle set_test_mode service call."""
+        config_entry_id = call.data["config_entry_id"]
+        enabled = call.data["enabled"]
+        entry = None
+        for entry_obj in hass.config_entries.async_entries(DOMAIN):
+            if entry_obj.entry_id == config_entry_id:
+                entry = entry_obj
+                break
+        if not entry:
+            return
+        new_options = dict(entry.options)
+        new_options[CONF_TEST_MODE] = enabled
+        hass.config_entries.async_update_entry(entry, options=new_options)
 
     async def handle_get_floor_data(call: ServiceCall) -> dict:
         """Handle get_floor_data service call."""
@@ -112,4 +149,12 @@ async def async_register_services(hass: HomeAssistant) -> None:
             SERVICE_RESET_HEATMAP,
             handle_reset_heatmap,
             schema=SERVICE_RESET_HEATMAP_SCHEMA,
+        )
+
+    if not hass.services.has_service(DOMAIN, SERVICE_SET_TEST_MODE):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_SET_TEST_MODE,
+            handle_set_test_mode,
+            schema=SERVICE_SET_TEST_MODE_SCHEMA,
         )
