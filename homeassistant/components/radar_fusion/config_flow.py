@@ -218,7 +218,7 @@ class RadarFusionOptionsFlow(OptionsFlow):
             return await self.async_step_sensors()
 
         # First step: select which sensor to edit
-        if self._edit_index == -1:
+        if self._edit_index is None:
             if user_input is not None:
                 # Extract index from selection like "0: Floor None - Position..."
                 selected = user_input["sensor_index"]
@@ -380,7 +380,7 @@ class RadarFusionOptionsFlow(OptionsFlow):
         self._zones = self.config_entry.options.get(CONF_ZONES, []).copy()
         return self.async_show_menu(
             step_id="zones",
-            menu_options=["add_zone", "remove_zone"],
+            menu_options=["add_zone", "edit_zone", "remove_zone"],
         )
 
     async def async_step_add_zone(
@@ -444,6 +444,115 @@ class RadarFusionOptionsFlow(OptionsFlow):
             },
         )
 
+    async def async_step_edit_zone(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Edit an existing zone."""
+        self._zones = self.config_entry.options.get(CONF_ZONES, []).copy()
+
+        if not self._zones:
+            return await self.async_step_zones()
+
+        # First step: select which zone to edit
+        if self._edit_index is None:
+            if user_input is not None:
+                # Extract index from selection like "0: Zone Name (Floor: None)"
+                selected = user_input["zone_index"]
+                self._edit_index = int(selected.split(":")[0])
+                return await self.async_step_edit_zone_form()
+
+            zone_options = [
+                f"{i}: {z.get(CONF_NAME)} (Floor: {z.get(CONF_FLOOR_ID, 'None')})"
+                for i, z in enumerate(self._zones)
+            ]
+
+            return self.async_show_form(
+                step_id="edit_zone",
+                data_schema=vol.Schema(
+                    {
+                        vol.Required("zone_index"): selector.SelectSelector(
+                            selector.SelectSelectorConfig(options=zone_options)
+                        ),
+                    }
+                ),
+            )
+
+        return await self.async_step_edit_zone_form(user_input)
+
+    async def async_step_edit_zone_form(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Edit zone form with current values."""
+        if self._edit_index is None or not (0 <= self._edit_index < len(self._zones)):
+            self._edit_index = None
+            return await self.async_step_zones()
+
+        current_zone = self._zones[self._edit_index]
+        errors = {}
+
+        if user_input is not None:
+            try:
+                # Parse and validate vertices
+                vertices = parse_vertices(user_input[CONF_VERTICES])
+                if len(vertices) < 3:
+                    errors["base"] = "insufficient_vertices"
+                else:
+                    zone_name = user_input[CONF_NAME]
+                    floor_id = user_input.get(CONF_FLOOR_ID)
+
+                    # Check uniqueness on floor (excluding current zone)
+                    existing_names = [
+                        z[CONF_NAME]
+                        for i, z in enumerate(self._zones)
+                        if z.get(CONF_FLOOR_ID) == floor_id and i != self._edit_index
+                    ]
+                    if zone_name in existing_names:
+                        errors["base"] = "duplicate_zone_name"
+                    else:
+                        # Update zone config
+                        self._zones[self._edit_index] = {
+                            CONF_NAME: zone_name,
+                            CONF_FLOOR_ID: floor_id,
+                            CONF_VERTICES: vertices,
+                        }
+
+                        # Update options
+                        new_options = {
+                            **self.config_entry.options,
+                            CONF_ZONES: self._zones,
+                        }
+                        self.hass.config_entries.async_update_entry(
+                            self.config_entry, options=new_options
+                        )
+                        self._edit_index = None
+                        return await self.async_step_zones()
+            except ValueError:
+                errors["base"] = "invalid_vertices"
+
+        # Format vertices for display
+        vertices_str = str(current_zone.get(CONF_VERTICES, []))
+
+        return self.async_show_form(
+            step_id="edit_zone_form",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_NAME, default=current_zone.get(CONF_NAME)): str,
+                    vol.Optional(
+                        CONF_FLOOR_ID, default=current_zone.get(CONF_FLOOR_ID)
+                    ): selector.FloorSelector(),
+                    vol.Required(
+                        CONF_VERTICES, default=vertices_str
+                    ): selector.TextSelector(
+                        selector.TextSelectorConfig(multiline=True)
+                    ),
+                }
+            ),
+            errors=errors,
+            description_placeholders={
+                "vertices_example": "[[0,0], [1000,0], [1000,1000], [0,1000]]"
+            },
+        )
+
     async def async_step_remove_zone(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
@@ -489,7 +598,7 @@ class RadarFusionOptionsFlow(OptionsFlow):
         self._block_zones = self.config_entry.options.get(CONF_BLOCK_ZONES, []).copy()
         return self.async_show_menu(
             step_id="block_zones",
-            menu_options=["add_block_zone", "remove_block_zone"],
+            menu_options=["add_block_zone", "edit_block_zone", "remove_block_zone"],
         )
 
     async def async_step_add_block_zone(
@@ -551,42 +660,156 @@ class RadarFusionOptionsFlow(OptionsFlow):
             },
         )
 
+    async def async_step_edit_block_zone(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Edit an existing block zone."""
+        self._block_zones = self.config_entry.options.get(CONF_BLOCK_ZONES, []).copy()
+
+        if not self._block_zones:
+            return await self.async_step_block_zones()
+
+        # First step: select which block zone to edit
+        if self._edit_index is None:
+            if user_input is not None:
+                # Extract index from selection like "0: Zone Name (Floor: None)"
+                selected = user_input["zone_index"]
+                self._edit_index = int(selected.split(":")[0])
+                return await self.async_step_edit_block_zone_form()
+
+            zone_options = [
+                f"{i}: {z.get(CONF_NAME)} (Floor: {z.get(CONF_FLOOR_ID, 'None')})"
+                for i, z in enumerate(self._block_zones)
+            ]
+
+            return self.async_show_form(
+                step_id="edit_block_zone",
+                data_schema=vol.Schema(
+                    {
+                        vol.Required("zone_index"): selector.SelectSelector(
+                            selector.SelectSelectorConfig(options=zone_options)
+                        ),
+                    }
+                ),
+            )
+
+        return await self.async_step_edit_block_zone_form(user_input)
+
+    async def async_step_edit_block_zone_form(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Edit block zone form with current values."""
+        if self._edit_index is None or not (
+            0 <= self._edit_index < len(self._block_zones)
+        ):
+            self._edit_index = None
+            return await self.async_step_block_zones()
+
+        current_zone = self._block_zones[self._edit_index]
+        errors = {}
+
+        if user_input is not None:
+            try:
+                # Parse and validate vertices
+                vertices = parse_vertices(user_input[CONF_VERTICES])
+                if len(vertices) < 3:
+                    errors["base"] = "insufficient_vertices"
+                else:
+                    zone_name = user_input[CONF_NAME]
+                    floor_id = user_input.get(CONF_FLOOR_ID)
+
+                    # Check uniqueness on floor (excluding current zone)
+                    existing_names = [
+                        z[CONF_NAME]
+                        for i, z in enumerate(self._block_zones)
+                        if z.get(CONF_FLOOR_ID) == floor_id and i != self._edit_index
+                    ]
+                    if zone_name in existing_names:
+                        errors["base"] = "duplicate_zone_name"
+                    else:
+                        # Update block zone config
+                        self._block_zones[self._edit_index] = {
+                            CONF_NAME: zone_name,
+                            CONF_FLOOR_ID: floor_id,
+                            CONF_VERTICES: vertices,
+                        }
+
+                        # Update options
+                        new_options = {
+                            **self.config_entry.options,
+                            CONF_BLOCK_ZONES: self._block_zones,
+                        }
+                        self.hass.config_entries.async_update_entry(
+                            self.config_entry, options=new_options
+                        )
+                        self._edit_index = None
+                        return await self.async_step_block_zones()
+            except ValueError:
+                errors["base"] = "invalid_vertices"
+
+        # Format vertices for display
+        vertices_str = str(current_zone.get(CONF_VERTICES, []))
+
+        return self.async_show_form(
+            step_id="edit_block_zone_form",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_NAME, default=current_zone.get(CONF_NAME)): str,
+                    vol.Optional(
+                        CONF_FLOOR_ID, default=current_zone.get(CONF_FLOOR_ID)
+                    ): selector.FloorSelector(),
+                    vol.Required(
+                        CONF_VERTICES, default=vertices_str
+                    ): selector.TextSelector(
+                        selector.TextSelectorConfig(multiline=True)
+                    ),
+                }
+            ),
+            errors=errors,
+            description_placeholders={
+                "vertices_example": "[[100,100], [200,100], [200,200], [100,200]]"
+            },
+        )
+
     async def async_step_remove_block_zone(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Remove a block zone."""
         self._block_zones = self.config_entry.options.get(CONF_BLOCK_ZONES, []).copy()
 
-        if not self._sensors:
-            return await self.async_step_sensors()
+        if not self._block_zones:
+            return await self.async_step_block_zones()
 
-        # First step: select which sensor to edit
-        if self._edit_index is None:
-            if user_input is not None:
-                # Extract index from selection like "0: Floor None - Position..."
-                selected = user_input["sensor_index"]
-                self._edit_index = int(selected.split(":")[0])
-                return await self.async_step_edit_sensor_form()
+        if user_input is not None:
+            # Extract index from selection like "0: Zone Name (Floor: None)"
+            selected = user_input["zone_index"]
+            zone_index = int(selected.split(":")[0])
+            if 0 <= zone_index < len(self._block_zones):
+                self._block_zones.pop(zone_index)
+                new_options = {
+                    **self.config_entry.options,
+                    CONF_BLOCK_ZONES: self._block_zones,
+                }
+                self.hass.config_entries.async_update_entry(
+                    self.config_entry, options=new_options
+                )
+            return await self.async_step_block_zones()
 
-            sensor_options = [
-                f"{i}: Floor {s.get(CONF_FLOOR_ID, 'None')} - "
-                f"Position ({s.get(CONF_POSITION_X)}, {s.get(CONF_POSITION_Y)})"
-                for i, s in enumerate(self._sensors)
-            ]
+        zone_options = [
+            f"{i}: {z.get(CONF_NAME)} (Floor: {z.get(CONF_FLOOR_ID, 'None')})"
+            for i, z in enumerate(self._block_zones)
+        ]
 
-            return self.async_show_form(
-                step_id="edit_sensor",
-                data_schema=vol.Schema(
-                    {
-                        vol.Required("sensor_index"): selector.SelectSelector(
-                            selector.SelectSelectorConfig(options=sensor_options)
-                        ),
-                    }
-                ),
-            )
-
-        # mypy: _edit_index is guaranteed to be int here
-        return await self.async_step_edit_sensor_form(user_input)
+        return self.async_show_form(
+            step_id="remove_block_zone",
+            data_schema=vol.Schema(
+                {
+                    vol.Required("zone_index"): selector.SelectSelector(
+                        selector.SelectSelectorConfig(options=zone_options)
+                    ),
+                }
+            ),
+        )
 
     # Settings
     async def async_step_settings(

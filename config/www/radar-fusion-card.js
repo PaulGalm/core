@@ -63,7 +63,7 @@ class RadarFusionCard extends HTMLElement {
       width: config.width || 800,
       height: config.height || 600,
       grid_size: config.grid_size || 5000, // mm
-      show_grid: config.show_grid !== false,
+      show_grid: config.show_grid === true,
       floor_id: config.floor_id || null,
       title: config.title || 'Radar Fusion',
       floorplan_url: config.floorplan_url || null,

@@ -93,7 +93,8 @@ class RadarFusionZoneSensor(
     @property
     def available(self) -> bool:
         """Return if entity is available."""
-        return self.coordinator.last_update_success
+        # Zone is available if coordinator has data, even if last update had issues
+        return self.coordinator.data is not None
 
     @callback
     def _handle_coordinator_update(self) -> None:

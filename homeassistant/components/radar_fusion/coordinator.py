@@ -110,6 +110,10 @@ class RadarFusionCoordinator(DataUpdateCoordinator):
         for sensor in self.sensors:
             self._tracked_entities.update(sensor.get(CONF_TARGET_ENTITIES, []))
 
+        # Track last heatmap persistence time
+        self._last_heatmap_persist = datetime.now()
+        self._heatmap_persist_interval = timedelta(minutes=5)  # Persist every 5 minutes
+
     async def _async_update_data(self) -> dict[str, Any]:
         """Update data."""
         now = datetime.now()
@@ -147,18 +151,8 @@ class RadarFusionCoordinator(DataUpdateCoordinator):
             "block_zone_count": len(self.block_zones),
         }
 
-    def reset_heatmap(self, floor_id: str | None = None) -> None:
-        """Reset the all-time heatmap for a floor or all floors.
-
-        If floor_id is None, reset all floors.
-        """
-        if floor_id is None:
-            # Clear all
-            self._counts_alltime = {f: {} for f in self._counts_alltime}
-        else:
-            self._counts_alltime[floor_id] = {}
-
-        # Persist cleared maps
+    def _persist_heatmaps(self) -> None:
+        """Persist all-time heatmap counts to config entry options."""
         serializable: dict[str | None, dict[str, int]] = {}
         for floor, mapping in self._counts_alltime.items():
             serializable[floor if floor is not None else "None"] = {
@@ -174,8 +168,23 @@ class RadarFusionCoordinator(DataUpdateCoordinator):
             self.hass.config_entries.async_update_entry(
                 self.config_entry, options=new_options
             )
+            _LOGGER.debug("Persisted heatmap data to config entry")
         except Exception:
-            _LOGGER.exception("Failed to persist heatmap all-time data after reset")
+            _LOGGER.exception("Failed to persist heatmap data")
+
+    def reset_heatmap(self, floor_id: str | None = None) -> None:
+        """Reset the all-time heatmap for a floor or all floors.
+
+        If floor_id is None, reset all floors.
+        """
+        if floor_id is None:
+            # Clear all
+            self._counts_alltime = {f: {} for f in self._counts_alltime}
+        else:
+            self._counts_alltime[floor_id] = {}
+
+        # Persist cleared maps immediately
+        self._persist_heatmaps()
 
     def _bin_index(self, coord_mm: float) -> int:
         """Get heatmap bin index for coordinate in millimeters."""
@@ -251,27 +260,10 @@ class RadarFusionCoordinator(DataUpdateCoordinator):
                     if self._counts_24h[floor][key] <= 0:
                         del self._counts_24h[floor][key]
 
-        # Persist all-time counts into config_entry.options
-        # Convert to serializable dict: floor -> {"x_y": count}
-        serializable: dict[str | None, dict[str, int]] = {}
-        for floor, mapping in self._counts_alltime.items():
-            serializable[floor if floor is not None else "None"] = {
-                f"{x}_{y}": int(c) for (x, y), c in mapping.items()
-            }
-
-        # Write options (merge with existing options)
-        if self.config_entry is None:
-            _LOGGER.error("No config_entry available; cannot persist heatmap data")
-            return
-
-        new_options = {**self.config_entry.options, CONF_HEATMAPS_ALLTIME: serializable}
-        try:
-            # Use async_update_entry to persist
-            self.hass.config_entries.async_update_entry(
-                self.config_entry, options=new_options
-            )
-        except Exception:
-            _LOGGER.exception("Failed to persist heatmap all-time data")
+        # Periodic persistence (every 5 minutes) to avoid too frequent config updates
+        if now - self._last_heatmap_persist >= self._heatmap_persist_interval:
+            self._persist_heatmaps()
+            self._last_heatmap_persist = now
 
     def _process_all_targets(self, now: datetime) -> list[dict[str, Any]]:
         """Process all targets from all sensors."""
@@ -352,6 +344,11 @@ class RadarFusionCoordinator(DataUpdateCoordinator):
             # Transform and add complete targets
             for target_data in targets_data.values():
                 if "x" not in target_data or "y" not in target_data:
+                    continue
+
+                # Filter out targets at (0,0) - these indicate no detection
+                # Allow small tolerance for floating point comparison
+                if abs(target_data["x"]) < 0.1 and abs(target_data["y"]) < 0.1:
                     continue
 
                 # Transform coordinates
@@ -573,15 +570,16 @@ class RadarFusionCoordinator(DataUpdateCoordinator):
                     "target_count": 1,
                 },
             ]
+            test_zone_vertices = [
+                [-1000, -1000],
+                [1000, -1000],
+                [1000, 1000],
+                [-1000, 1000],
+            ]
             zones = [
                 {
                     "name": "TestZone",
-                    "vertices": [
-                        [-1000, -1000],
-                        [1000, -1000],
-                        [1000, 1000],
-                        [-1000, 1000],
-                    ],
+                    "vertices": test_zone_vertices,
                 }
             ]
             block_zones = [
@@ -610,6 +608,18 @@ class RadarFusionCoordinator(DataUpdateCoordinator):
             # Update heatmaps with target detections (same as real mode)
             self._update_heatmaps(targets, datetime.now())
 
+            # Calculate occupancy for each zone
+            zones_with_occupancy = [
+                {
+                    **z,
+                    "occupancy": any(
+                        point_in_polygon(t["x"], t["y"], z.get("vertices", []))
+                        for t in targets
+                    ),
+                }
+                for z in zones
+            ]
+
             # Return actual heatmap data from accumulated counts
             heatmap_data: dict[str, Any] = {
                 "resolution_mm": HEATMAP_RES_MM,
@@ -635,7 +645,7 @@ class RadarFusionCoordinator(DataUpdateCoordinator):
             return {
                 "floor_id": floor_id,
                 "sensors": sensors,
-                "zones": zones,
+                "zones": zones_with_occupancy,
                 "block_zones": block_zones,
                 "targets": targets,
                 "heatmap": heatmap_data,
@@ -666,6 +676,10 @@ class RadarFusionCoordinator(DataUpdateCoordinator):
             {
                 "name": z.get("name"),
                 "vertices": z.get(CONF_VERTICES),
+                "occupancy": any(
+                    point_in_polygon(t["x"], t["y"], z.get(CONF_VERTICES, []))
+                    for t in targets
+                ),
             }
             for z in self.zones
             if z.get(CONF_FLOOR_ID) == floor_id

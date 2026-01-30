@@ -97,9 +97,52 @@
       "block_zones": {
         "menu_options": {
           "add_block_zone": "Add block zone",
+          "edit_block_zone": "Edit block zone",
           "remove_block_zone": "Remove block zone"
         },
         "title": "Block Zone Management"
+      },
+      "edit_block_zone": {
+        "data": {
+          "zone_index": "Block zone to edit"
+        },
+        "description": "Select a block zone to edit.",
+        "title": "Edit Block Zone"
+      },
+      "edit_block_zone_form": {
+        "data": {
+          "floor_id": "Floor",
+          "name": "Block zone name",
+          "vertices": "Vertices"
+        },
+        "data_description": {
+          "floor_id": "Floor where block zone is located",
+          "name": "Unique name for the block zone",
+          "vertices": "Block zone polygon vertices in millimeters"
+        },
+        "description": "Edit the block zone. Targets within this zone will be filtered out when enabled. Provide vertices as [[x,y], [x,y], ...] or space-separated pairs.\n\nExample: {vertices_example}",
+        "title": "Edit Block Zone"
+      },
+      "edit_zone": {
+        "data": {
+          "zone_index": "Zone to edit"
+        },
+        "description": "Select a zone to edit.",
+        "title": "Edit Zone"
+      },
+      "edit_zone_form": {
+        "data": {
+          "floor_id": "Floor",
+          "name": "Zone name",
+          "vertices": "Vertices"
+        },
+        "data_description": {
+          "floor_id": "Floor where zone is located",
+          "name": "Unique name for the zone",
+          "vertices": "Zone polygon vertices in millimeters"
+        },
+        "description": "Edit the detection zone. Provide vertices as [[x,y], [x,y], ...] or space-separated pairs.\n\nExample: {vertices_example}",
+        "title": "Edit Zone"
       },
       "init": {
         "menu_options": {
@@ -152,6 +195,7 @@
       "zones": {
         "menu_options": {
           "add_zone": "Add zone",
+          "edit_zone": "Edit zone",
           "remove_zone": "Remove zone"
         },
         "title": "Zone Management"
