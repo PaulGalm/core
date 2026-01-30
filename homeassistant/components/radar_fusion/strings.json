@@ -15,11 +15,13 @@
       "user": {
         "data": {
           "name": "Name",
-          "staleness_timeout": "Target staleness timeout"
+          "staleness_timeout": "Target staleness timeout",
+          "test_mode": "Test mode"
         },
         "data_description": {
           "name": "Name for this integration instance",
-          "staleness_timeout": "Time in seconds before targets are considered stale and filtered out"
+          "staleness_timeout": "Time in seconds before targets are considered stale and filtered out",
+          "test_mode": "Enable test mode for debugging"
         },
         "description": "Configure multi-sensor radar fusion for presence detection with ESPHome LD2450 sensors.",
         "title": "Set up Radar Fusion"

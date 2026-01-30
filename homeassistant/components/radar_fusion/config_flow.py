@@ -101,6 +101,62 @@ class RadarFusionOptionsFlow(OptionsFlow):
         self._block_zones: list[dict[str, Any]] = []
         self._edit_index: int | None = None
 
+    def _build_zone_schema(
+        self, current_zone: dict[str, Any] | None = None
+    ) -> vol.Schema:
+        """Build schema for zone forms."""
+        if current_zone is None:
+            return vol.Schema(
+                {
+                    vol.Required(CONF_NAME): str,
+                    vol.Optional(CONF_FLOOR_ID): selector.FloorSelector(),
+                    vol.Required(CONF_VERTICES): selector.TextSelector(
+                        selector.TextSelectorConfig(multiline=True)
+                    ),
+                }
+            )
+
+        # Edit mode: build schema with defaults
+        vertices = current_zone.get(CONF_VERTICES, [])
+        vertices_str = json.dumps(vertices) if vertices else "[]"
+
+        schema_dict: dict[Any, Any] = {
+            vol.Required(CONF_NAME, default=current_zone.get(CONF_NAME, "")): str,
+        }
+
+        floor_id = current_zone.get(CONF_FLOOR_ID)
+        if floor_id is not None:
+            schema_dict[vol.Optional(CONF_FLOOR_ID, default=floor_id)] = (
+                selector.FloorSelector()
+            )
+        else:
+            schema_dict[vol.Optional(CONF_FLOOR_ID)] = selector.FloorSelector()
+
+        schema_dict[vol.Required(CONF_VERTICES, default=vertices_str)] = (
+            selector.TextSelector(selector.TextSelectorConfig(multiline=True))
+        )
+
+        return vol.Schema(schema_dict)
+
+    def _get_zone_label(self, zone: dict[str, Any]) -> str:
+        """Generate display label for a zone."""
+        return f"{zone.get(CONF_NAME)} (Floor: {zone.get(CONF_FLOOR_ID, 'None')})"
+
+    def _validate_zone_name(
+        self,
+        zone_name: str,
+        floor_id: str | None,
+        zones: list[dict[str, Any]],
+        exclude_index: int | None = None,
+    ) -> bool:
+        """Check if zone name is unique on the floor."""
+        existing_names = [
+            z[CONF_NAME]
+            for i, z in enumerate(zones)
+            if z.get(CONF_FLOOR_ID) == floor_id and i != exclude_index
+        ]
+        return zone_name not in existing_names
+
     def _get_target_entities_from_device(self, device_id: str) -> list[str]:
         """Get target entities from a device."""
         entity_registry = er.async_get(self.hass)
@@ -392,53 +448,32 @@ class RadarFusionOptionsFlow(OptionsFlow):
 
         if user_input is not None:
             try:
-                # Parse and validate vertices
                 vertices = parse_vertices(user_input[CONF_VERTICES])
                 if len(vertices) < 3:
                     errors["base"] = "insufficient_vertices"
+                elif not self._validate_zone_name(
+                    user_input[CONF_NAME], user_input.get(CONF_FLOOR_ID), self._zones
+                ):
+                    errors["base"] = "duplicate_zone_name"
                 else:
-                    zone_name = user_input[CONF_NAME]
-                    floor_id = user_input.get(CONF_FLOOR_ID)
-
-                    # Check uniqueness on floor
-                    existing_names = [
-                        z[CONF_NAME]
-                        for z in self._zones
-                        if z.get(CONF_FLOOR_ID) == floor_id
-                    ]
-                    if zone_name in existing_names:
-                        errors["base"] = "duplicate_zone_name"
-                    else:
-                        zone_config = {
-                            CONF_NAME: zone_name,
-                            CONF_FLOOR_ID: floor_id,
+                    self._zones.append(
+                        {
+                            CONF_NAME: user_input[CONF_NAME],
+                            CONF_FLOOR_ID: user_input.get(CONF_FLOOR_ID),
                             CONF_VERTICES: vertices,
                         }
-                        self._zones.append(zone_config)
-
-                        # Update options
-                        new_options = {
-                            **self.config_entry.options,
-                            CONF_ZONES: self._zones,
-                        }
-                        self.hass.config_entries.async_update_entry(
-                            self.config_entry, options=new_options
-                        )
-                        return await self.async_step_zones()
+                    )
+                    self.hass.config_entries.async_update_entry(
+                        self.config_entry,
+                        options={**self.config_entry.options, CONF_ZONES: self._zones},
+                    )
+                    return await self.async_step_zones()
             except ValueError:
                 errors["base"] = "invalid_vertices"
 
         return self.async_show_form(
             step_id="add_zone",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(CONF_NAME): str,
-                    vol.Optional(CONF_FLOOR_ID): selector.FloorSelector(),
-                    vol.Required(CONF_VERTICES): selector.TextSelector(
-                        selector.TextSelectorConfig(multiline=True)
-                    ),
-                }
-            ),
+            data_schema=self._build_zone_schema(),
             errors=errors,
             description_placeholders={
                 "vertices_example": "[[0,0], [1000,0], [1000,1000], [0,1000]]"
@@ -454,25 +489,22 @@ class RadarFusionOptionsFlow(OptionsFlow):
         if not self._zones:
             return await self.async_step_zones()
 
-        # First step: select which zone to edit
         if self._edit_index is None:
             if user_input is not None:
-                # Extract index from selection like "0: Zone Name (Floor: None)"
-                selected = user_input["zone_index"]
-                self._edit_index = int(selected.split(":")[0])
+                self._edit_index = int(user_input["zone_index"].split(":")[0])
                 return await self.async_step_edit_zone_form()
-
-            zone_options = [
-                f"{i}: {z.get(CONF_NAME)} (Floor: {z.get(CONF_FLOOR_ID, 'None')})"
-                for i, z in enumerate(self._zones)
-            ]
 
             return self.async_show_form(
                 step_id="edit_zone",
                 data_schema=vol.Schema(
                     {
                         vol.Required("zone_index"): selector.SelectSelector(
-                            selector.SelectSelectorConfig(options=zone_options)
+                            selector.SelectSelectorConfig(
+                                options=[
+                                    f"{i}: {self._get_zone_label(z)}"
+                                    for i, z in enumerate(self._zones)
+                                ]
+                            )
                         ),
                     }
                 ),
@@ -493,67 +525,34 @@ class RadarFusionOptionsFlow(OptionsFlow):
 
         if user_input is not None:
             try:
-                # Parse and validate vertices
                 vertices = parse_vertices(user_input[CONF_VERTICES])
                 if len(vertices) < 3:
                     errors["base"] = "insufficient_vertices"
+                elif not self._validate_zone_name(
+                    user_input[CONF_NAME],
+                    user_input.get(CONF_FLOOR_ID),
+                    self._zones,
+                    self._edit_index,
+                ):
+                    errors["base"] = "duplicate_zone_name"
                 else:
-                    zone_name = user_input[CONF_NAME]
-                    floor_id = user_input.get(CONF_FLOOR_ID)
-
-                    # Check uniqueness on floor (excluding current zone)
-                    existing_names = [
-                        z[CONF_NAME]
-                        for i, z in enumerate(self._zones)
-                        if z.get(CONF_FLOOR_ID) == floor_id and i != self._edit_index
-                    ]
-                    if zone_name in existing_names:
-                        errors["base"] = "duplicate_zone_name"
-                    else:
-                        # Update zone config
-                        self._zones[self._edit_index] = {
-                            CONF_NAME: zone_name,
-                            CONF_FLOOR_ID: floor_id,
-                            CONF_VERTICES: vertices,
-                        }
-
-                        # Update options
-                        new_options = {
-                            **self.config_entry.options,
-                            CONF_ZONES: self._zones,
-                        }
-                        self.hass.config_entries.async_update_entry(
-                            self.config_entry, options=new_options
-                        )
-                        self._edit_index = None
-                        return await self.async_step_zones()
+                    self._zones[self._edit_index] = {
+                        CONF_NAME: user_input[CONF_NAME],
+                        CONF_FLOOR_ID: user_input.get(CONF_FLOOR_ID),
+                        CONF_VERTICES: vertices,
+                    }
+                    self.hass.config_entries.async_update_entry(
+                        self.config_entry,
+                        options={**self.config_entry.options, CONF_ZONES: self._zones},
+                    )
+                    self._edit_index = None
+                    return await self.async_step_zones()
             except ValueError:
                 errors["base"] = "invalid_vertices"
 
-        # Format vertices for display as proper JSON string
-        vertices = current_zone.get(CONF_VERTICES, [])
-        vertices_str = json.dumps(vertices) if vertices else "[]"
-
-        # Build schema - conditionally include floor_id default if it exists
-        schema_dict: dict[Any, Any] = {
-            vol.Required(CONF_NAME, default=current_zone.get(CONF_NAME, "")): str,
-        }
-
-        floor_id = current_zone.get(CONF_FLOOR_ID)
-        if floor_id is not None:
-            schema_dict[vol.Optional(CONF_FLOOR_ID, default=floor_id)] = (
-                selector.FloorSelector()
-            )
-        else:
-            schema_dict[vol.Optional(CONF_FLOOR_ID)] = selector.FloorSelector()
-
-        schema_dict[vol.Required(CONF_VERTICES, default=vertices_str)] = (
-            selector.TextSelector(selector.TextSelectorConfig(multiline=True))
-        )
-
         return self.async_show_form(
             step_id="edit_zone_form",
-            data_schema=vol.Schema(schema_dict),
+            data_schema=self._build_zone_schema(current_zone),
             errors=errors,
             description_placeholders={
                 "vertices_example": "[[0,0], [1000,0], [1000,1000], [0,1000]]"
@@ -570,28 +569,26 @@ class RadarFusionOptionsFlow(OptionsFlow):
             return await self.async_step_zones()
 
         if user_input is not None:
-            # Extract index from selection like "0: Zone Name (Floor: None)"
-            selected = user_input["zone_index"]
-            zone_index = int(selected.split(":")[0])
+            zone_index = int(user_input["zone_index"].split(":")[0])
             if 0 <= zone_index < len(self._zones):
                 self._zones.pop(zone_index)
-                new_options = {**self.config_entry.options, CONF_ZONES: self._zones}
                 self.hass.config_entries.async_update_entry(
-                    self.config_entry, options=new_options
+                    self.config_entry,
+                    options={**self.config_entry.options, CONF_ZONES: self._zones},
                 )
             return await self.async_step_zones()
-
-        zone_options = [
-            f"{i}: {z.get(CONF_NAME)} (Floor: {z.get(CONF_FLOOR_ID, 'None')})"
-            for i, z in enumerate(self._zones)
-        ]
 
         return self.async_show_form(
             step_id="remove_zone",
             data_schema=vol.Schema(
                 {
                     vol.Required("zone_index"): selector.SelectSelector(
-                        selector.SelectSelectorConfig(options=zone_options)
+                        selector.SelectSelectorConfig(
+                            options=[
+                                f"{i}: {self._get_zone_label(z)}"
+                                for i, z in enumerate(self._zones)
+                            ]
+                        )
                     ),
                 }
             ),
@@ -619,48 +616,34 @@ class RadarFusionOptionsFlow(OptionsFlow):
                 vertices = parse_vertices(user_input[CONF_VERTICES])
                 if len(vertices) < 3:
                     errors["base"] = "insufficient_vertices"
+                elif not self._validate_zone_name(
+                    user_input[CONF_NAME],
+                    user_input.get(CONF_FLOOR_ID),
+                    self._block_zones,
+                ):
+                    errors["base"] = "duplicate_zone_name"
                 else:
-                    zone_name = user_input[CONF_NAME]
-                    floor_id = user_input.get(CONF_FLOOR_ID)
-
-                    # Check uniqueness on floor
-                    existing_names = [
-                        z[CONF_NAME]
-                        for z in self._block_zones
-                        if z.get(CONF_FLOOR_ID) == floor_id
-                    ]
-                    if zone_name in existing_names:
-                        errors["base"] = "duplicate_zone_name"
-                    else:
-                        block_zone_config = {
-                            CONF_NAME: zone_name,
-                            CONF_FLOOR_ID: floor_id,
+                    self._block_zones.append(
+                        {
+                            CONF_NAME: user_input[CONF_NAME],
+                            CONF_FLOOR_ID: user_input.get(CONF_FLOOR_ID),
                             CONF_VERTICES: vertices,
                         }
-                        self._block_zones.append(block_zone_config)
-
-                        new_options = {
+                    )
+                    self.hass.config_entries.async_update_entry(
+                        self.config_entry,
+                        options={
                             **self.config_entry.options,
                             CONF_BLOCK_ZONES: self._block_zones,
-                        }
-                        self.hass.config_entries.async_update_entry(
-                            self.config_entry, options=new_options
-                        )
-                        return await self.async_step_block_zones()
+                        },
+                    )
+                    return await self.async_step_block_zones()
             except ValueError:
                 errors["base"] = "invalid_vertices"
 
         return self.async_show_form(
             step_id="add_block_zone",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(CONF_NAME): str,
-                    vol.Optional(CONF_FLOOR_ID): selector.FloorSelector(),
-                    vol.Required(CONF_VERTICES): selector.TextSelector(
-                        selector.TextSelectorConfig(multiline=True)
-                    ),
-                }
-            ),
+            data_schema=self._build_zone_schema(),
             errors=errors,
             description_placeholders={
                 "vertices_example": "[[100,100], [200,100], [200,200], [100,200]]"
@@ -676,25 +659,22 @@ class RadarFusionOptionsFlow(OptionsFlow):
         if not self._block_zones:
             return await self.async_step_block_zones()
 
-        # First step: select which block zone to edit
         if self._edit_index is None:
             if user_input is not None:
-                # Extract index from selection like "0: Zone Name (Floor: None)"
-                selected = user_input["zone_index"]
-                self._edit_index = int(selected.split(":")[0])
+                self._edit_index = int(user_input["zone_index"].split(":")[0])
                 return await self.async_step_edit_block_zone_form()
-
-            zone_options = [
-                f"{i}: {z.get(CONF_NAME)} (Floor: {z.get(CONF_FLOOR_ID, 'None')})"
-                for i, z in enumerate(self._block_zones)
-            ]
 
             return self.async_show_form(
                 step_id="edit_block_zone",
                 data_schema=vol.Schema(
                     {
                         vol.Required("zone_index"): selector.SelectSelector(
-                            selector.SelectSelectorConfig(options=zone_options)
+                            selector.SelectSelectorConfig(
+                                options=[
+                                    f"{i}: {self._get_zone_label(z)}"
+                                    for i, z in enumerate(self._block_zones)
+                                ]
+                            )
                         ),
                     }
                 ),
@@ -717,67 +697,37 @@ class RadarFusionOptionsFlow(OptionsFlow):
 
         if user_input is not None:
             try:
-                # Parse and validate vertices
                 vertices = parse_vertices(user_input[CONF_VERTICES])
                 if len(vertices) < 3:
                     errors["base"] = "insufficient_vertices"
+                elif not self._validate_zone_name(
+                    user_input[CONF_NAME],
+                    user_input.get(CONF_FLOOR_ID),
+                    self._block_zones,
+                    self._edit_index,
+                ):
+                    errors["base"] = "duplicate_zone_name"
                 else:
-                    zone_name = user_input[CONF_NAME]
-                    floor_id = user_input.get(CONF_FLOOR_ID)
-
-                    # Check uniqueness on floor (excluding current zone)
-                    existing_names = [
-                        z[CONF_NAME]
-                        for i, z in enumerate(self._block_zones)
-                        if z.get(CONF_FLOOR_ID) == floor_id and i != self._edit_index
-                    ]
-                    if zone_name in existing_names:
-                        errors["base"] = "duplicate_zone_name"
-                    else:
-                        # Update block zone config
-                        self._block_zones[self._edit_index] = {
-                            CONF_NAME: zone_name,
-                            CONF_FLOOR_ID: floor_id,
-                            CONF_VERTICES: vertices,
-                        }
-
-                        # Update options
-                        new_options = {
+                    self._block_zones[self._edit_index] = {
+                        CONF_NAME: user_input[CONF_NAME],
+                        CONF_FLOOR_ID: user_input.get(CONF_FLOOR_ID),
+                        CONF_VERTICES: vertices,
+                    }
+                    self.hass.config_entries.async_update_entry(
+                        self.config_entry,
+                        options={
                             **self.config_entry.options,
                             CONF_BLOCK_ZONES: self._block_zones,
-                        }
-                        self.hass.config_entries.async_update_entry(
-                            self.config_entry, options=new_options
-                        )
-                        self._edit_index = None
-                        return await self.async_step_block_zones()
+                        },
+                    )
+                    self._edit_index = None
+                    return await self.async_step_block_zones()
             except ValueError:
                 errors["base"] = "invalid_vertices"
 
-        # Format vertices for display as proper JSON string
-        vertices = current_zone.get(CONF_VERTICES, [])
-        vertices_str = json.dumps(vertices) if vertices else "[]"
-
-        # Build schema - conditionally include floor_id default if it exists
-        schema_dict: dict[Any, Any] = {
-            vol.Required(CONF_NAME, default=current_zone.get(CONF_NAME, "")): str,
-        }
-
-        floor_id = current_zone.get(CONF_FLOOR_ID)
-        if floor_id is not None:
-            schema_dict[vol.Optional(CONF_FLOOR_ID, default=floor_id)] = (
-                selector.FloorSelector()
-            )
-        else:
-            schema_dict[vol.Optional(CONF_FLOOR_ID)] = selector.FloorSelector()
-
-        schema_dict[vol.Required(CONF_VERTICES, default=vertices_str)] = (
-            selector.TextSelector(selector.TextSelectorConfig(multiline=True))
-        )
-
         return self.async_show_form(
             step_id="edit_block_zone_form",
-            data_schema=vol.Schema(schema_dict),
+            data_schema=self._build_zone_schema(current_zone),
             errors=errors,
             description_placeholders={
                 "vertices_example": "[[100,100], [200,100], [200,200], [100,200]]"
@@ -794,31 +744,29 @@ class RadarFusionOptionsFlow(OptionsFlow):
             return await self.async_step_block_zones()
 
         if user_input is not None:
-            # Extract index from selection like "0: Zone Name (Floor: None)"
-            selected = user_input["zone_index"]
-            zone_index = int(selected.split(":")[0])
+            zone_index = int(user_input["zone_index"].split(":")[0])
             if 0 <= zone_index < len(self._block_zones):
                 self._block_zones.pop(zone_index)
-                new_options = {
-                    **self.config_entry.options,
-                    CONF_BLOCK_ZONES: self._block_zones,
-                }
                 self.hass.config_entries.async_update_entry(
-                    self.config_entry, options=new_options
+                    self.config_entry,
+                    options={
+                        **self.config_entry.options,
+                        CONF_BLOCK_ZONES: self._block_zones,
+                    },
                 )
             return await self.async_step_block_zones()
-
-        zone_options = [
-            f"{i}: {z.get(CONF_NAME)} (Floor: {z.get(CONF_FLOOR_ID, 'None')})"
-            for i, z in enumerate(self._block_zones)
-        ]
 
         return self.async_show_form(
             step_id="remove_block_zone",
             data_schema=vol.Schema(
                 {
                     vol.Required("zone_index"): selector.SelectSelector(
-                        selector.SelectSelectorConfig(options=zone_options)
+                        selector.SelectSelectorConfig(
+                            options=[
+                                f"{i}: {self._get_zone_label(z)}"
+                                for i, z in enumerate(self._block_zones)
+                            ]
+                        )
                     ),
                 }
             ),
