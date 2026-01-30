@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import voluptuous as vol
@@ -529,24 +530,30 @@ class RadarFusionOptionsFlow(OptionsFlow):
             except ValueError:
                 errors["base"] = "invalid_vertices"
 
-        # Format vertices for display
-        vertices_str = str(current_zone.get(CONF_VERTICES, []))
+        # Format vertices for display as proper JSON string
+        vertices = current_zone.get(CONF_VERTICES, [])
+        vertices_str = json.dumps(vertices) if vertices else "[]"
+
+        # Build schema - conditionally include floor_id default if it exists
+        schema_dict: dict[Any, Any] = {
+            vol.Required(CONF_NAME, default=current_zone.get(CONF_NAME, "")): str,
+        }
+
+        floor_id = current_zone.get(CONF_FLOOR_ID)
+        if floor_id is not None:
+            schema_dict[vol.Optional(CONF_FLOOR_ID, default=floor_id)] = (
+                selector.FloorSelector()
+            )
+        else:
+            schema_dict[vol.Optional(CONF_FLOOR_ID)] = selector.FloorSelector()
+
+        schema_dict[vol.Required(CONF_VERTICES, default=vertices_str)] = (
+            selector.TextSelector(selector.TextSelectorConfig(multiline=True))
+        )
 
         return self.async_show_form(
             step_id="edit_zone_form",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(CONF_NAME, default=current_zone.get(CONF_NAME)): str,
-                    vol.Optional(
-                        CONF_FLOOR_ID, default=current_zone.get(CONF_FLOOR_ID)
-                    ): selector.FloorSelector(),
-                    vol.Required(
-                        CONF_VERTICES, default=vertices_str
-                    ): selector.TextSelector(
-                        selector.TextSelectorConfig(multiline=True)
-                    ),
-                }
-            ),
+            data_schema=vol.Schema(schema_dict),
             errors=errors,
             description_placeholders={
                 "vertices_example": "[[0,0], [1000,0], [1000,1000], [0,1000]]"
@@ -747,24 +754,30 @@ class RadarFusionOptionsFlow(OptionsFlow):
             except ValueError:
                 errors["base"] = "invalid_vertices"
 
-        # Format vertices for display
-        vertices_str = str(current_zone.get(CONF_VERTICES, []))
+        # Format vertices for display as proper JSON string
+        vertices = current_zone.get(CONF_VERTICES, [])
+        vertices_str = json.dumps(vertices) if vertices else "[]"
+
+        # Build schema - conditionally include floor_id default if it exists
+        schema_dict: dict[Any, Any] = {
+            vol.Required(CONF_NAME, default=current_zone.get(CONF_NAME, "")): str,
+        }
+
+        floor_id = current_zone.get(CONF_FLOOR_ID)
+        if floor_id is not None:
+            schema_dict[vol.Optional(CONF_FLOOR_ID, default=floor_id)] = (
+                selector.FloorSelector()
+            )
+        else:
+            schema_dict[vol.Optional(CONF_FLOOR_ID)] = selector.FloorSelector()
+
+        schema_dict[vol.Required(CONF_VERTICES, default=vertices_str)] = (
+            selector.TextSelector(selector.TextSelectorConfig(multiline=True))
+        )
 
         return self.async_show_form(
             step_id="edit_block_zone_form",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(CONF_NAME, default=current_zone.get(CONF_NAME)): str,
-                    vol.Optional(
-                        CONF_FLOOR_ID, default=current_zone.get(CONF_FLOOR_ID)
-                    ): selector.FloorSelector(),
-                    vol.Required(
-                        CONF_VERTICES, default=vertices_str
-                    ): selector.TextSelector(
-                        selector.TextSelectorConfig(multiline=True)
-                    ),
-                }
-            ),
+            data_schema=vol.Schema(schema_dict),
             errors=errors,
             description_placeholders={
                 "vertices_example": "[[100,100], [200,100], [200,200], [100,200]]"
