@@ -463,6 +463,17 @@ class RadarFusionHeatmapCard extends HTMLElement {
   getCardSize() {
     return 3;
   }
+
+  static getConfigElement() {
+    return document.createElement("radar-fusion-heatmap-card-editor");
+  }
+
+  static getStubConfig() {
+    return {
+      config_entry_id: "",
+      title: "Radar Heatmap",
+    };
+  }
 }
 
 // Configuration editor for the visual card editor
@@ -479,14 +490,16 @@ class RadarFusionHeatmapCardEditor extends HTMLElement {
   }
 
   setConfig(config) {
-    this._config = config;
+    this._config = { ...config };
     this.render();
+    this.attachEventListeners();
   }
 
   render() {
     this.shadowRoot.innerHTML = `
       <style>
-        ha-card {
+        :host {
+          display: block;
           padding: 16px;
         }
         .form-group {
@@ -496,91 +509,221 @@ class RadarFusionHeatmapCardEditor extends HTMLElement {
           display: block;
           margin-bottom: 8px;
           font-weight: 500;
+          color: var(--primary-text-color);
         }
-        input, select {
+        input[type="text"],
+        input[type="number"] {
           width: 100%;
           padding: 8px;
           border: 1px solid var(--divider-color);
           border-radius: 4px;
           font-size: 14px;
           box-sizing: border-box;
+          background: var(--card-background-color);
+          color: var(--primary-text-color);
         }
-        input:focus, select:focus {
+        input:focus {
           outline: none;
           border-color: var(--primary-color);
-          background: var(--card-background-color);
         }
         .form-description {
           font-size: 12px;
           color: var(--secondary-text-color);
           margin-top: 4px;
         }
+        input[type="checkbox"] {
+          margin-right: 8px;
+          cursor: pointer;
+        }
+        .checkbox-group {
+          display: flex;
+          align-items: center;
+          margin-top: 8px;
+        }
+        .checkbox-group label {
+          margin: 0;
+          font-weight: normal;
+        }
       </style>
-      <ha-form
-        .hass="${this._hass}"
-        .data="${this._config}"
-        .schema="${this.schema}"
-        .computeLabel="${this.computeLabel}"
-        @value-changed="${this.handleValueChange}"
-      ></ha-form>
+      <div class="form-group">
+        <label for="config_entry_id">Config Entry ID *</label>
+        <input
+          type="text"
+          id="config_entry_id"
+          placeholder="Config entry ID from Settings"
+          value="${this._config.config_entry_id || ""}"
+        />
+        <div class="form-description">
+          Find this in Settings → Devices & Services → Radar Fusion
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label for="title">Title</label>
+        <input
+          type="text"
+          id="title"
+          placeholder="Radar Fusion Heatmap"
+          value="${this._config.title || "Radar Fusion Heatmap"}"
+        />
+      </div>
+
+      <div class="form-group">
+        <label for="floor_id">Floor ID</label>
+        <input
+          type="text"
+          id="floor_id"
+          placeholder="Optional - leave empty for all floors"
+          value="${this._config.floor_id || ""}"
+        />
+        <div class="form-description">
+          Filter to show only a specific floor (e.g., "ground_floor", "first_floor")
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label for="floorplan_url">Floorplan Image URL</label>
+        <input
+          type="text"
+          id="floorplan_url"
+          placeholder="/local/floorplan.png"
+          value="${this._config.floorplan_url || ""}"
+        />
+        <div class="form-description">
+          Path to your floorplan image (upload via Media browser)
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label for="floorplan_width_mm">Floorplan Width (mm)</label>
+        <input
+          type="number"
+          id="floorplan_width_mm"
+          placeholder="10000"
+          min="0"
+          step="100"
+          value="${this._config.floorplan_width_mm || ""}"
+        />
+        <div class="form-description">
+          Physical width of your floorplan in millimeters
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label for="floorplan_height_mm">Floorplan Height (mm)</label>
+        <input
+          type="number"
+          id="floorplan_height_mm"
+          placeholder="8000"
+          min="0"
+          step="100"
+          value="${this._config.floorplan_height_mm || ""}"
+        />
+        <div class="form-description">
+          Physical height of your floorplan in millimeters
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label for="offset_x">X Offset (mm)</label>
+        <input
+          type="number"
+          id="offset_x"
+          placeholder="0"
+          step="10"
+          value="${this._config.offset_x || 0}"
+        />
+        <div class="form-description">
+          Horizontal offset to align radar coordinates with floorplan
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label for="offset_y">Y Offset (mm)</label>
+        <input
+          type="number"
+          id="offset_y"
+          placeholder="0"
+          step="10"
+          value="${this._config.offset_y || 0}"
+        />
+        <div class="form-description">
+          Vertical offset to align radar coordinates with floorplan
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label for="width">Width (pixels)</label>
+        <input
+          type="number"
+          id="width"
+          min="300"
+          max="2000"
+          step="100"
+          value="${this._config.width || 800}"
+        />
+      </div>
+
+      <div class="form-group">
+        <label for="height">Height (pixels)</label>
+        <input
+          type="number"
+          id="height"
+          min="200"
+          max="1500"
+          step="100"
+          value="${this._config.height || 600}"
+        />
+      </div>
+
+      <div class="form-group">
+        <label for="grid_size">Grid Size (mm)</label>
+        <input
+          type="number"
+          id="grid_size"
+          min="1000"
+          max="20000"
+          step="500"
+          value="${this._config.grid_size || 5000}"
+        />
+      </div>
+
+      <div class="form-group">
+        <div class="checkbox-group">
+          <input
+            type="checkbox"
+            id="show_grid"
+            ${this._config.show_grid ? "checked" : ""}
+          />
+          <label for="show_grid">Show Grid</label>
+        </div>
+      </div>
     `;
   }
 
-  get schema() {
-    return [
-      {
-        type: "string",
-        id: "config_entry_id",
-        label: "Config Entry ID",
-        selector: { text: {} },
-        description: "The radar_fusion config entry ID from Settings",
-      },
-      {
-        type: "string",
-        id: "title",
-        label: "Title",
-        default: "Radar Fusion Heatmap",
-        selector: { text: {} },
-      },
-      {
-        type: "integer",
-        id: "width",
-        label: "Width (pixels)",
-        default: 800,
-        selector: { number: { min: 300, max: 2000, step: 100 } },
-      },
-      {
-        type: "integer",
-        id: "height",
-        label: "Height (pixels)",
-        default: 600,
-        selector: { number: { min: 200, max: 1500, step: 100 } },
-      },
-      {
-        type: "integer",
-        id: "grid_size",
-        label: "Grid Size (mm)",
-        default: 5000,
-        selector: { number: { min: 1000, max: 20000, step: 500 } },
-      },
-      {
-        type: "boolean",
-        id: "show_grid",
-        label: "Show Grid",
-        default: true,
-        selector: { boolean: {} },
-      },
-    ];
+  attachEventListeners() {
+    const inputs = this.shadowRoot.querySelectorAll("input");
+    inputs.forEach((input) => {
+      input.addEventListener("change", (ev) => this.handleInputChange(ev));
+    });
   }
 
-  computeLabel = (schema) => {
-    return schema.label || schema.id;
-  };
+  handleInputChange(ev) {
+    const target = ev.target;
+    const id = target.id;
+    let value;
 
-  handleValueChange = (ev) => {
-    this._config = ev.detail.value;
+    if (target.type === "checkbox") {
+      value = target.checked;
+    } else if (target.type === "number") {
+      value = parseInt(target.value, 10);
+    } else {
+      value = target.value;
+    }
+
+    this._config = { ...this._config, [id]: value };
     this.fireConfigChanged();
-  };
+  }
 
   fireConfigChanged() {
     this.dispatchEvent(

@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import voluptuous as vol
 
+from homeassistant.components.http import StaticPathConfig
+from homeassistant.components.lovelace import DOMAIN as LOVELACE_DOMAIN
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
@@ -18,6 +22,9 @@ from .const import (
     SERVICE_RESET_HEATMAP,
 )
 from .coordinator import RadarFusionCoordinator
+
+# Static path URL for serving frontend files
+STATIC_PATH_URL = "/radar_fusion_static"
 
 SERVICE_SET_TEST_MODE = "set_test_mode"
 
@@ -71,12 +78,56 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Register services
     await async_register_services(hass)
 
+    # Register static path for frontend files and Lovelace resources
+    await _register_frontend(hass)
+
     return True
 
 
 async def config_entry_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Update listener, called when the config entry options are changed."""
     await hass.config_entries.async_reload(entry.entry_id)
+
+
+async def _register_frontend(hass: HomeAssistant) -> None:
+    """Register static path and Lovelace resources for Radar Fusion cards."""
+    # Get the path to the frontend directory
+    frontend_path = Path(__file__).parent / "frontend"
+
+    # Register static path to serve frontend files
+    await hass.http.async_register_static_paths(
+        [StaticPathConfig(STATIC_PATH_URL, str(frontend_path), cache_headers=False)]
+    )
+
+    # Access the Lovelace resources collection
+    lovelace_data = hass.data.get(LOVELACE_DOMAIN)
+    if lovelace_data is None:
+        return
+
+    resources = lovelace_data.get("resources")
+    if resources is None:
+        return
+
+    # Check if resources already registered
+    existing_resources = resources.async_items()
+    resource_urls = {item["url"] for item in existing_resources}
+
+    # Define card resources to register
+    card_resources = [
+        {
+            "url": f"{STATIC_PATH_URL}/radar-fusion-card.js",
+            "type": "module",
+        },
+        {
+            "url": f"{STATIC_PATH_URL}/radar-fusion-heatmap-card.js",
+            "type": "module",
+        },
+    ]
+
+    # Register each resource if not already present
+    for resource in card_resources:
+        if resource["url"] not in resource_urls:
+            await resources.async_create_item(resource)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
