@@ -28,6 +28,8 @@ SERVICE_SET_TEST_MODE_SCHEMA = vol.Schema(
     }
 )
 
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
+
 PLATFORMS = [Platform.BINARY_SENSOR, Platform.SWITCH]
 
 SERVICE_GET_FLOOR_DATA_SCHEMA = vol.Schema(

@@ -202,6 +202,54 @@
         "reveal": "always",
         "panel": "new"
       }
+    },
+    {
+      "label": "Sync Radar Fusion to HACS (Patch)",
+      "detail": "Sync radar_fusion to HACS with patch version bump (e.g., 1.0.0 → 1.0.1)",
+      "type": "shell",
+      "command": "bash script/sync_radar_fusion_hacs.sh --patch",
+      "group": "build",
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Sync Radar Fusion to HACS (Minor)",
+      "detail": "Sync radar_fusion to HACS with minor version bump (e.g., 1.0.0 → 1.1.0)",
+      "type": "shell",
+      "command": "bash script/sync_radar_fusion_hacs.sh --minor",
+      "group": "build",
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Sync Radar Fusion to HACS (Major)",
+      "detail": "Sync radar_fusion to HACS with major version bump (e.g., 1.0.0 → 2.0.0)",
+      "type": "shell",
+      "command": "bash script/sync_radar_fusion_hacs.sh --major",
+      "group": "build",
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Sync Radar Fusion to HACS (Keep Version)",
+      "detail": "Sync radar_fusion to HACS without changing version",
+      "type": "shell",
+      "command": "bash script/sync_radar_fusion_hacs.sh --keep",
+      "group": "build",
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      },
+      "problemMatcher": []
     }
   ],
   "inputs": [

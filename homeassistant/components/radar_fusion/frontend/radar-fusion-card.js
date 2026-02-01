@@ -1,17 +1,25 @@
 class RadarFusionCard extends HTMLElement {
   constructor() {
     super();
-    this.attachShadow({ mode: 'open' });
+    this.attachShadow({ mode: "open" });
     this._config = {};
     this._hass = null;
     this._showZones = true;
     this._showSensors = true;
     this._showDetectionZones = true;
     this._sensorColors = [
-      '#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A', '#98D8C8',
-      '#F7DC6F', '#BB8FCE', '#85C1E2', '#F8B739', '#52B788'
+      "#FF6B6B",
+      "#4ECDC4",
+      "#45B7D1",
+      "#FFA07A",
+      "#98D8C8",
+      "#F7DC6F",
+      "#BB8FCE",
+      "#85C1E2",
+      "#F8B739",
+      "#52B788",
     ];
-    this._heatmapScale = 'hourly';
+    this._heatmapScale = "hourly";
     this._updateInterval = null;
     this._updateFrequency = 1000; // Slower fetch
     this._lastTargetHash = null; // Only compare targets
@@ -37,14 +45,19 @@ class RadarFusionCard extends HTMLElement {
         if (!newData) return;
 
         // Hash only targets and block_zones (things that actually change frequently)
-        const targetHash = JSON.stringify(newData.targets?.map(t => [t.x, t.y, t.age]) || []);
+        const targetHash = JSON.stringify(
+          newData.targets?.map((t) => [t.x, t.y, t.age]) || [],
+        );
 
         if (targetHash !== this._lastTargetHash) {
           this._lastTargetHash = targetHash;
           this._pendingData = newData;
           // Use requestAnimationFrame for smooth rendering
-          if (this._animationFrameId) cancelAnimationFrame(this._animationFrameId);
-          this._animationFrameId = requestAnimationFrame(() => this.drawRadar());
+          if (this._animationFrameId)
+            cancelAnimationFrame(this._animationFrameId);
+          this._animationFrameId = requestAnimationFrame(() =>
+            this.drawRadar(),
+          );
         }
       }
     }, this._updateFrequency);
@@ -59,18 +72,18 @@ class RadarFusionCard extends HTMLElement {
 
   setConfig(config) {
     this._config = {
-      config_entry_id: config.config_entry_id || null,  // Auto-discover if not provided
+      config_entry_id: config.config_entry_id || null, // Auto-discover if not provided
       width: config.width || 800,
       height: config.height || 600,
       grid_size: config.grid_size || 5000, // mm
       show_grid: config.show_grid === true,
       floor_id: config.floor_id || null,
-      title: config.title || 'Radar Fusion',
+      title: config.title || "Radar Fusion",
       floorplan_url: config.floorplan_url || null,
-      floorplan_width_mm: config.floorplan_width_mm || null,  // Physical width of floorplan in mm
-      floorplan_height_mm: config.floorplan_height_mm || null,  // Physical height of floorplan in mm
-      offset_x: config.offset_x || 0,  // Shift in mm
-      offset_y: config.offset_y || 0,  // Shift in mm
+      floorplan_width_mm: config.floorplan_width_mm || null, // Physical width of floorplan in mm
+      floorplan_height_mm: config.floorplan_height_mm || null, // Physical height of floorplan in mm
+      offset_x: config.offset_x || 0, // Shift in mm
+      offset_y: config.offset_y || 0, // Shift in mm
     };
     // Load floorplan image if provided
     if (this._config.floorplan_url) {
@@ -80,8 +93,16 @@ class RadarFusionCard extends HTMLElement {
         // Re-render when image loads to apply correct dimensions
         this.render();
       };
-      img.onerror = () => { console.warn('Failed to load floorplan image'); };
+      img.onerror = () => {
+        console.warn("Failed to load floorplan image");
+      };
       img.src = this._config.floorplan_url;
+    }
+
+    // If hass is already set, initialize the card now
+    if (this._hass) {
+      this.updateCard();
+      this.startPolling();
     }
   }
 
@@ -90,56 +111,107 @@ class RadarFusionCard extends HTMLElement {
     if (this._config.config_entry_id) return this._config.config_entry_id;
 
     try {
-      console.log('Radar Fusion: Attempting auto-discovery...');
+      console.log("Radar Fusion: Attempting auto-discovery...");
 
       // Look for any radar_fusion entity
       const states = this._hass.states;
       for (const entityId in states) {
-        const state = states[entityId];
-        // Check if entity belongs to radar_fusion
-        if ((entityId.startsWith('binary_sensor.') || entityId.startsWith('switch.')) &&
-            state.attributes.attribution === 'Radar Fusion') {
+        // Check if entity might belong to radar_fusion
+        if (
+          entityId.startsWith("binary_sensor.") ||
+          entityId.startsWith("switch.")
+        ) {
+          try {
+            const entityInfo = await this._hass.connection.sendMessagePromise({
+              type: "config/entity_registry/get",
+              entity_id: entityId,
+            });
 
-          const entityInfo = await this._hass.connection.sendMessagePromise({
-            type: 'config/entity_registry/get',
-            entity_id: entityId,
-          });
-
-          if (entityInfo && entityInfo.config_entry_id) {
-            this._config.config_entry_id = entityInfo.config_entry_id;
-            console.log('Radar Fusion: Auto-discovered →', entityInfo.config_entry_id);
-            return entityInfo.config_entry_id;
+            if (
+              entityInfo &&
+              entityInfo.platform === "radar_fusion" &&
+              entityInfo.config_entry_id
+            ) {
+              this._config.config_entry_id = entityInfo.config_entry_id;
+              console.log(
+                "Radar Fusion: Auto-discovered →",
+                entityInfo.config_entry_id,
+              );
+              return entityInfo.config_entry_id;
+            }
+          } catch (err) {
+            // Entity not in registry, skip
+            continue;
           }
         }
       }
 
-      console.warn('Radar Fusion: No entities found. Please add sensors or zones first.');
+      console.warn(
+        "Radar Fusion: No entities found. Please add sensors or zones first.",
+      );
     } catch (error) {
-      console.error('Radar Fusion: Discovery failed:', error);
+      console.error("Radar Fusion: Discovery failed:", error);
     }
 
     return null;
   }
 
   set hass(hass) {
+    const firstRun = !this._hass;
     this._hass = hass;
-    this.updateCard();
-    this.startPolling();
+
+    // Don't start polling or update if we don't have a valid hass object
+    if (!hass) return;
+
+    // Only update/poll if card has been configured
+    if (firstRun && this._config.config_entry_id !== undefined) {
+      this.updateCard();
+      this.startPolling();
+    } else if (!firstRun) {
+      // Subsequent hass updates - card is already running
+      // Polling handles updates automatically
+    }
   }
 
   async updateCard() {
-    if (!this._hass) return;
+    if (!this._hass) {
+      console.error("Radar Fusion: No hass object");
+      return;
+    }
+
+    // Show loading state initially
+    this.renderLoading();
 
     // Auto-discover config entry if not set
     if (!this._config.config_entry_id) {
+      console.log("Radar Fusion: No config_entry_id, starting discovery...");
       const discovered = await this.discoverConfigEntry();
       if (!discovered) {
-        this.renderError('No Radar Fusion integration found. Please add it in Settings → Devices & Services.');
+        console.error("Radar Fusion: Discovery failed");
+        this.renderError(
+          "No Radar Fusion integration found. Please add it in Settings → Devices & Services.",
+        );
         return;
       }
+      console.log("Radar Fusion: Discovered config_entry_id:", discovered);
     }
 
-    this.render();
+    // Fetch initial data before rendering
+    console.log("Radar Fusion: Fetching floor data...");
+    const initialData = await this.getFloorData();
+    if (initialData) {
+      console.log("Radar Fusion: Got floor data:", initialData);
+      this._pendingData = initialData;
+      this._lastTargetHash = JSON.stringify(
+        initialData.targets?.map((t) => [t.x, t.y, t.age]) || [],
+      );
+      this.render();
+    } else {
+      console.error("Radar Fusion: getFloorData returned null");
+      this.renderError(
+        "Failed to load radar data. Check that the integration is configured correctly.",
+      );
+    }
   }
 
   render() {
@@ -147,13 +219,19 @@ class RadarFusionCard extends HTMLElement {
     let canvasWidth = this._config.width;
     let canvasHeight = this._config.height;
 
-    if (this._floorplanImage && this._config.floorplan_width_mm && this._config.floorplan_height_mm) {
+    if (
+      this._floorplanImage &&
+      this._config.floorplan_width_mm &&
+      this._config.floorplan_height_mm
+    ) {
       // Use explicit dimensions
-      const aspect = this._config.floorplan_width_mm / this._config.floorplan_height_mm;
+      const aspect =
+        this._config.floorplan_width_mm / this._config.floorplan_height_mm;
       canvasHeight = Math.round(canvasWidth / aspect);
     } else if (this._floorplanImage && this._config.floorplan_width_mm) {
       // Calculate from image aspect ratio
-      const imgAspect = this._floorplanImage.width / this._floorplanImage.height;
+      const imgAspect =
+        this._floorplanImage.width / this._floorplanImage.height;
       canvasHeight = Math.round(canvasWidth / imgAspect);
     }
 
@@ -235,13 +313,13 @@ class RadarFusionCard extends HTMLElement {
       <div class="card-header">
         <div class="card-title">${this._config.title}</div>
         <div class="controls">
-          <button class="toggle-btn ${this._showZones ? 'active' : ''}" id="toggle-zones">
+          <button class="toggle-btn ${this._showZones ? "active" : ""}" id="toggle-zones">
             Zones
           </button>
-          <button class="toggle-btn ${this._showSensors ? 'active' : ''}" id="toggle-sensors">
+          <button class="toggle-btn ${this._showSensors ? "active" : ""}" id="toggle-sensors">
             Sensors
           </button>
-          <button class="toggle-btn ${this._showDetectionZones ? 'active' : ''}" id="toggle-detection">
+          <button class="toggle-btn ${this._showDetectionZones ? "active" : ""}" id="toggle-detection">
             Detection Zones
           </button>
         </div>
@@ -256,46 +334,54 @@ class RadarFusionCard extends HTMLElement {
     this.shadowRoot.innerHTML = html;
 
     // Add event listeners
-    this.shadowRoot.getElementById('toggle-zones').addEventListener('click', () => {
-      this._showZones = !this._showZones;
-      this.updateCard();
-    });
-    this.shadowRoot.getElementById('toggle-sensors').addEventListener('click', () => {
-      this._showSensors = !this._showSensors;
-      this.updateCard();
-    });
-    this.shadowRoot.getElementById('toggle-detection').addEventListener('click', () => {
-      this._showDetectionZones = !this._showDetectionZones;
-      this.updateCard();
-    });
+    this.shadowRoot
+      .getElementById("toggle-zones")
+      .addEventListener("click", () => {
+        this._showZones = !this._showZones;
+        this.updateCard();
+      });
+    this.shadowRoot
+      .getElementById("toggle-sensors")
+      .addEventListener("click", () => {
+        this._showSensors = !this._showSensors;
+        this.updateCard();
+      });
+    this.shadowRoot
+      .getElementById("toggle-detection")
+      .addEventListener("click", () => {
+        this._showDetectionZones = !this._showDetectionZones;
+        this.updateCard();
+      });
 
     this.drawRadar();
   }
 
   async drawRadar() {
-    const canvas = this.shadowRoot.getElementById('radarCanvas');
+    const canvas = this.shadowRoot.getElementById("radarCanvas");
     if (!canvas) return;
 
     const data = this._pendingData;
     if (!data) return;
 
-    const ctx = canvas.getContext('2d');
+    const ctx = canvas.getContext("2d");
     const width = canvas.width;
     const height = canvas.height;
 
     // Clear canvas only
-    ctx.fillStyle = '#1a1a1a';
+    ctx.fillStyle = "#1a1a1a";
     ctx.fillRect(0, 0, width, height);
 
     let gridSize = this._config.grid_size;
     let scale = Math.min(width / gridSize, height / gridSize) * 0.9;
-    let actualGridHeight = gridSize;  // For calculating origin positioning
+    let actualGridHeight = gridSize; // For calculating origin positioning
 
     // If floorplan is provided and has dimensions metadata, scale according to floorplan
     if (this._floorplanImage && this._config.floorplan_width_mm) {
       const floorplanPhysicalWidth = this._config.floorplan_width_mm;
-      const floorplanPhysicalHeight = this._config.floorplan_height_mm ||
-        (this._floorplanImage.height / this._floorplanImage.width) * floorplanPhysicalWidth;
+      const floorplanPhysicalHeight =
+        this._config.floorplan_height_mm ||
+        (this._floorplanImage.height / this._floorplanImage.width) *
+          floorplanPhysicalWidth;
 
       gridSize = floorplanPhysicalWidth;
       actualGridHeight = floorplanPhysicalHeight;
@@ -312,7 +398,7 @@ class RadarFusionCard extends HTMLElement {
     }
 
     // Origin at lower-left corner (0,0 = lower-left, not center)
-    const originX = width * 0.05;  // 5% margin from left
+    const originX = width * 0.05; // 5% margin from left
     const originY = height * 0.95; // 5% margin from bottom
 
     // Helper function to convert mm coordinates to canvas (0,0 at lower-left)
@@ -348,7 +434,7 @@ class RadarFusionCard extends HTMLElement {
 
     // Draw grid
     if (this._config.show_grid) {
-      ctx.strokeStyle = '#2a2a2a';
+      ctx.strokeStyle = "#2a2a2a";
       ctx.lineWidth = 1;
       const gridStep = 1000; // 1 meter
 
@@ -371,7 +457,7 @@ class RadarFusionCard extends HTMLElement {
       }
 
       // Draw center axes
-      ctx.strokeStyle = '#3a3a3a';
+      ctx.strokeStyle = "#3a3a3a";
       ctx.lineWidth = 2;
       // Draw X axis (horizontal at originY)
       ctx.beginPath();
@@ -389,8 +475,8 @@ class RadarFusionCard extends HTMLElement {
     if (this._showZones && data.zones) {
       data.zones.forEach((zone) => {
         if (zone.vertices && zone.vertices.length >= 3) {
-          ctx.fillStyle = 'rgba(76, 175, 80, 0.2)';
-          ctx.strokeStyle = 'rgba(76, 175, 80, 0.8)';
+          ctx.fillStyle = "rgba(76, 175, 80, 0.2)";
+          ctx.strokeStyle = "rgba(76, 175, 80, 0.8)";
           ctx.lineWidth = 2;
 
           ctx.beginPath();
@@ -407,9 +493,9 @@ class RadarFusionCard extends HTMLElement {
           // Draw zone name
           const center = this.getPolygonCenter(zone.vertices);
           const centerCanvas = toCanvas(center.x, center.y);
-          ctx.fillStyle = '#4CAF50';
-          ctx.font = '14px sans-serif';
-          ctx.textAlign = 'center';
+          ctx.fillStyle = "#4CAF50";
+          ctx.font = "14px sans-serif";
+          ctx.textAlign = "center";
           ctx.fillText(zone.name, centerCanvas.x, centerCanvas.y);
         }
       });
@@ -419,8 +505,8 @@ class RadarFusionCard extends HTMLElement {
     if (this._showDetectionZones && data.block_zones) {
       data.block_zones.forEach((zone) => {
         if (zone.vertices && zone.vertices.length >= 3) {
-          ctx.fillStyle = 'rgba(244, 67, 54, 0.2)';
-          ctx.strokeStyle = 'rgba(244, 67, 54, 0.8)';
+          ctx.fillStyle = "rgba(244, 67, 54, 0.2)";
+          ctx.strokeStyle = "rgba(244, 67, 54, 0.8)";
           ctx.lineWidth = 2;
           ctx.setLineDash([5, 5]);
 
@@ -439,18 +525,22 @@ class RadarFusionCard extends HTMLElement {
           // Draw zone name
           const center = this.getPolygonCenter(zone.vertices);
           const centerCanvas = toCanvas(center.x, center.y);
-          ctx.fillStyle = '#F44336';
-          ctx.font = '12px sans-serif';
-          ctx.textAlign = 'center';
-          ctx.fillText(zone.name + ' (blocked)', centerCanvas.x, centerCanvas.y);
+          ctx.fillStyle = "#F44336";
+          ctx.font = "12px sans-serif";
+          ctx.textAlign = "center";
+          ctx.fillText(
+            zone.name + " (blocked)",
+            centerCanvas.x,
+            centerCanvas.y,
+          );
         }
       });
     }
 
     // Draw sensors and detection zones
     if (data.sensors) {
-      const legend = this.shadowRoot.getElementById('legend');
-      legend.innerHTML = '';
+      const legend = this.shadowRoot.getElementById("legend");
+      legend.innerHTML = "";
 
       data.sensors.forEach((sensor, idx) => {
         const color = this._sensorColors[idx % this._sensorColors.length];
@@ -461,8 +551,8 @@ class RadarFusionCard extends HTMLElement {
           const angle = 120; // degrees total (±60°)
           const rotation = sensor.rotation || 0;
 
-          ctx.fillStyle = color + '20';
-          ctx.strokeStyle = color + '80';
+          ctx.fillStyle = color + "20";
+          ctx.strokeStyle = color + "80";
           ctx.lineWidth = 1;
           ctx.setLineDash([3, 3]);
 
@@ -471,8 +561,8 @@ class RadarFusionCard extends HTMLElement {
           ctx.moveTo(sensorPos.x, sensorPos.y);
 
           // Draw cone
-          const startAngle = (rotation - angle / 2) * Math.PI / 180;
-          const endAngle = (rotation + angle / 2) * Math.PI / 180;
+          const startAngle = ((rotation - angle / 2) * Math.PI) / 180;
+          const endAngle = ((rotation + angle / 2) * Math.PI) / 180;
 
           for (let a = startAngle; a <= endAngle; a += 0.1) {
             const x = sensor.position_x + range * Math.cos(a + Math.PI / 2);
@@ -492,7 +582,7 @@ class RadarFusionCard extends HTMLElement {
 
           // Sensor marker
           ctx.fillStyle = color;
-          ctx.strokeStyle = '#fff';
+          ctx.strokeStyle = "#fff";
           ctx.lineWidth = 2;
           ctx.beginPath();
           ctx.arc(sensorPos.x, sensorPos.y, 10, 0, 2 * Math.PI);
@@ -502,7 +592,7 @@ class RadarFusionCard extends HTMLElement {
           // Direction indicator
           const rotation = sensor.rotation || 0;
           const dirLength = 20;
-          const dirAngle = (rotation + 90) * Math.PI / 180;
+          const dirAngle = ((rotation + 90) * Math.PI) / 180;
           const dirX = sensorPos.x + dirLength * Math.cos(dirAngle);
           const dirY = sensorPos.y - dirLength * Math.sin(dirAngle);
 
@@ -514,15 +604,15 @@ class RadarFusionCard extends HTMLElement {
           ctx.stroke();
 
           // Sensor label
-          ctx.fillStyle = '#fff';
-          ctx.font = '10px sans-serif';
-          ctx.textAlign = 'center';
+          ctx.fillStyle = "#fff";
+          ctx.font = "10px sans-serif";
+          ctx.textAlign = "center";
           ctx.fillText(`S${idx + 1}`, sensorPos.x, sensorPos.y - 18);
         }
 
         // Add to legend
-        const legendItem = document.createElement('div');
-        legendItem.className = 'legend-item';
+        const legendItem = document.createElement("div");
+        legendItem.className = "legend-item";
         legendItem.innerHTML = `
           <div class="legend-color" style="background: ${color}"></div>
           <span>Sensor ${idx + 1} (${sensor.target_count || 0} targets)</span>
@@ -533,26 +623,30 @@ class RadarFusionCard extends HTMLElement {
 
     // Draw targets
     if (data.targets && data.targets.length > 0) {
-      console.log('Drawing targets:', data.targets.length, data.targets);
+      console.log("Drawing targets:", data.targets.length, data.targets);
       data.targets.forEach((target) => {
         // Skip invalid targets
         if (target.x === -1 || target.y === -1) {
           return;
         }
 
-        const sensorIdx = data.sensors.findIndex(s =>
-          target.sensor_entities && s.target_entities &&
-          s.target_entities.some(e => target.sensor_entities.includes(e))
+        const sensorIdx = data.sensors.findIndex(
+          (s) =>
+            target.sensor_entities &&
+            s.target_entities &&
+            s.target_entities.some((e) => target.sensor_entities.includes(e)),
         );
         const color = this._sensorColors[sensorIdx >= 0 ? sensorIdx : 0];
 
         const pos = toCanvas(target.x, target.y);
 
-        console.log(`Target at (${target.x}, ${target.y}) -> canvas (${pos.x}, ${pos.y}), color: ${color}`);
+        console.log(
+          `Target at (${target.x}, ${target.y}) -> canvas (${pos.x}, ${pos.y}), color: ${color}`,
+        );
 
         // Draw target
         ctx.fillStyle = color;
-        ctx.strokeStyle = '#fff';
+        ctx.strokeStyle = "#fff";
         ctx.lineWidth = 2;
         ctx.beginPath();
         ctx.arc(pos.x, pos.y, 6, 0, 2 * Math.PI);
@@ -561,8 +655,12 @@ class RadarFusionCard extends HTMLElement {
 
         // Draw target trail/motion indicator
         if (target.age !== undefined && target.age < 5) {
-          const alpha = 1 - (target.age / 5);
-          ctx.fillStyle = color + Math.floor(alpha * 255).toString(16).padStart(2, '0');
+          const alpha = 1 - target.age / 5;
+          ctx.fillStyle =
+            color +
+            Math.floor(alpha * 255)
+              .toString(16)
+              .padStart(2, "0");
           ctx.beginPath();
           ctx.arc(pos.x, pos.y, 8 + target.age * 2, 0, 2 * Math.PI);
           ctx.fill();
@@ -574,7 +672,8 @@ class RadarFusionCard extends HTMLElement {
 
     // Update stats
     const totalTargets = data.targets?.length || 0;
-    const activeSensors = data.sensors?.filter(s => s.target_count > 0).length || 0;
+    const activeSensors =
+      data.sensors?.filter((s) => s.target_count > 0).length || 0;
     const totalZones = data.zones?.length || 0;
     if (statsEl) {
       statsEl.textContent = `${totalTargets} active targets • ${activeSensors}/${data.sensors?.length || 0} sensors • ${totalZones} zones`;
@@ -582,8 +681,9 @@ class RadarFusionCard extends HTMLElement {
   }
 
   getPolygonCenter(vertices) {
-    let x = 0, y = 0;
-    vertices.forEach(v => {
+    let x = 0,
+      y = 0;
+    vertices.forEach((v) => {
       x += v[0];
       y += v[1];
     });
@@ -595,17 +695,20 @@ class RadarFusionCard extends HTMLElement {
       // Auto-discover config entry if needed
       const configEntryId = await this.discoverConfigEntry();
       if (!configEntryId) {
-        console.error('No radar_fusion config entry found');
+        console.error("No radar_fusion config entry found");
         return null;
       }
 
-      console.log('Calling get_floor_data service with config_entry_id:', configEntryId);
+      console.log(
+        "Calling get_floor_data service with config_entry_id:",
+        configEntryId,
+      );
 
       // Call the service using hass.callWS
       const result = await this._hass.callWS({
-        type: 'call_service',
-        domain: 'radar_fusion',
-        service: 'get_floor_data',
+        type: "call_service",
+        domain: "radar_fusion",
+        service: "get_floor_data",
         service_data: {
           config_entry_id: configEntryId,
           floor_id: this._config.floor_id || null,
@@ -613,10 +716,10 @@ class RadarFusionCard extends HTMLElement {
         return_response: true,
       });
 
-      console.log('Received floor data:', result);
+      console.log("Received floor data:", result);
       return result.response;
     } catch (error) {
-      console.error('Failed to get floor data:', error);
+      console.error("Failed to get floor data:", error);
       return null;
     }
   }
@@ -627,9 +730,9 @@ class RadarFusionCard extends HTMLElement {
       if (!configEntryId) return null;
 
       await this._hass.callWS({
-        type: 'call_service',
-        domain: 'radar_fusion',
-        service: 'reset_heatmap',
+        type: "call_service",
+        domain: "radar_fusion",
+        service: "reset_heatmap",
         service_data: {
           config_entry_id: configEntryId,
           floor_id: this._config.floor_id || null,
@@ -637,7 +740,7 @@ class RadarFusionCard extends HTMLElement {
       });
       return true;
     } catch (err) {
-      console.error('Failed to reset heatmap:', err);
+      console.error("Failed to reset heatmap:", err);
       return false;
     }
   }
@@ -676,24 +779,57 @@ class RadarFusionCard extends HTMLElement {
     `;
   }
 
+  renderLoading() {
+    this.shadowRoot.innerHTML = `
+      <style>
+        .loading-container {
+          padding: 32px;
+          text-align: center;
+        }
+        .loading-title {
+          font-size: 18px;
+          margin-bottom: 16px;
+          color: var(--primary-text-color);
+        }
+        .loading-spinner {
+          width: 40px;
+          height: 40px;
+          margin: 0 auto;
+          border: 4px solid var(--divider-color);
+          border-top: 4px solid var(--primary-color);
+          border-radius: 50%;
+          animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+          0% { transform: rotate(0deg); }
+          100% { transform: rotate(360deg); }
+        }
+      </style>
+      <div class="loading-container">
+        <div class="loading-title">🔄 Loading Radar Fusion...</div>
+        <div class="loading-spinner"></div>
+      </div>
+    `;
+  }
+
   getCardSize() {
     return 5;
   }
 }
 
-customElements.define('radar-fusion-card', RadarFusionCard);
+customElements.define("radar-fusion-card", RadarFusionCard);
 
 // Register with custom cards registry
 window.customCards = window.customCards || [];
 window.customCards.push({
-  type: 'radar-fusion-card',
-  name: 'Radar Fusion Card',
-  description: 'Visualize radar sensors, zones, and detected targets',
+  type: "radar-fusion-card",
+  name: "Radar Fusion Card",
+  description: "Visualize radar sensors, zones, and detected targets",
   preview: true,
 });
 
 console.info(
-  '%c RADAR-FUSION-CARD %c v1.0.0 ',
-  'color: white; background: #4CAF50; font-weight: bold;',
-  'color: #4CAF50; background: white; font-weight: bold;',
+  "%c RADAR-FUSION-CARD %c v1.0.0 ",
+  "color: white; background: #4CAF50; font-weight: bold;",
+  "color: #4CAF50; background: white; font-weight: bold;",
 );
