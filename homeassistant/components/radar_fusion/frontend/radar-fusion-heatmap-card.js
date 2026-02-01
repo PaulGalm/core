@@ -465,6 +465,138 @@ class RadarFusionHeatmapCard extends HTMLElement {
   }
 }
 
+// Configuration editor for the visual card editor
+class RadarFusionHeatmapCardEditor extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: "open" });
+    this._config = {};
+    this._hass = null;
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+  }
+
+  setConfig(config) {
+    this._config = config;
+    this.render();
+  }
+
+  render() {
+    this.shadowRoot.innerHTML = `
+      <style>
+        ha-card {
+          padding: 16px;
+        }
+        .form-group {
+          margin-bottom: 16px;
+        }
+        label {
+          display: block;
+          margin-bottom: 8px;
+          font-weight: 500;
+        }
+        input, select {
+          width: 100%;
+          padding: 8px;
+          border: 1px solid var(--divider-color);
+          border-radius: 4px;
+          font-size: 14px;
+          box-sizing: border-box;
+        }
+        input:focus, select:focus {
+          outline: none;
+          border-color: var(--primary-color);
+          background: var(--card-background-color);
+        }
+        .form-description {
+          font-size: 12px;
+          color: var(--secondary-text-color);
+          margin-top: 4px;
+        }
+      </style>
+      <ha-form
+        .hass="${this._hass}"
+        .data="${this._config}"
+        .schema="${this.schema}"
+        .computeLabel="${this.computeLabel}"
+        @value-changed="${this.handleValueChange}"
+      ></ha-form>
+    `;
+  }
+
+  get schema() {
+    return [
+      {
+        type: "string",
+        id: "config_entry_id",
+        label: "Config Entry ID",
+        selector: { text: {} },
+        description: "The radar_fusion config entry ID from Settings",
+      },
+      {
+        type: "string",
+        id: "title",
+        label: "Title",
+        default: "Radar Fusion Heatmap",
+        selector: { text: {} },
+      },
+      {
+        type: "integer",
+        id: "width",
+        label: "Width (pixels)",
+        default: 800,
+        selector: { number: { min: 300, max: 2000, step: 100 } },
+      },
+      {
+        type: "integer",
+        id: "height",
+        label: "Height (pixels)",
+        default: 600,
+        selector: { number: { min: 200, max: 1500, step: 100 } },
+      },
+      {
+        type: "integer",
+        id: "grid_size",
+        label: "Grid Size (mm)",
+        default: 5000,
+        selector: { number: { min: 1000, max: 20000, step: 500 } },
+      },
+      {
+        type: "boolean",
+        id: "show_grid",
+        label: "Show Grid",
+        default: true,
+        selector: { boolean: {} },
+      },
+    ];
+  }
+
+  computeLabel = (schema) => {
+    return schema.label || schema.id;
+  };
+
+  handleValueChange = (ev) => {
+    this._config = ev.detail.value;
+    this.fireConfigChanged();
+  };
+
+  fireConfigChanged() {
+    this.dispatchEvent(
+      new CustomEvent("config-changed", {
+        detail: { config: this._config },
+        bubbles: true,
+        composed: true,
+      }),
+    );
+  }
+}
+
+customElements.define(
+  "radar-fusion-heatmap-card-editor",
+  RadarFusionHeatmapCardEditor,
+);
 customElements.define("radar-fusion-heatmap-card", RadarFusionHeatmapCard);
 
 window.customCards = window.customCards || [];
@@ -473,6 +605,7 @@ window.customCards.push({
   name: "Radar Fusion Heatmap Card",
   description: "Standalone heatmap visualization for Radar Fusion",
   preview: true,
+  configElement: "radar-fusion-heatmap-card-editor",
 });
 
 console.info(
